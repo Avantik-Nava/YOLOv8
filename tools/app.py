@@ -1,6 +1,7 @@
-"""Local validation UI (Streamlit).
+"""Local validation UI (Streamlit) — direct video inference.
 
-Upload: class file + exp file + weights + image/video  ->  annotated result.
+Upload: class file + exp file + weights, Load Model,
+then upload a video, Load Video -> annotated result with player.
 
 Run:  streamlit run tools/app.py
 Then open the printed Local URL (http://localhost:8501).
@@ -195,8 +196,7 @@ def main():
     st.title("🎯 Model Validation Studio")
 
     for k, v in {"model": None, "exp": None, "names": None, "model_info": "",
-                 "legacy": None, "media_kind": None, "img_result": None,
-                 "img_dets": None, "frames": None, "fps": 25.0,
+                 "legacy": None, "frames": None, "fps": 25.0,
                  "video_bytes": None, "stats": "", "playing": False,
                  "frame": 0}.items():
         st.session_state.setdefault(k, v)
@@ -204,8 +204,8 @@ def main():
     # status bar
     s1, s2 = st.columns(2)
     s1.success("✅ Model loaded" if st.session_state.model is not None else "⚪ Model: not loaded")
-    media_ok = st.session_state.img_result is not None or st.session_state.frames is not None
-    s2.success("✅ Media processed" if media_ok else "⚪ Media: not processed")
+    media_ok = st.session_state.frames is not None
+    s2.success("✅ Video processed" if media_ok else "⚪ Video: not processed")
 
     # ---------- STEP 1 ----------
     st.markdown('<div class="step-card"><div class="step-title">Step 1 — Model: upload weights + classes + exp, then Load Model</div>',
@@ -240,7 +240,6 @@ def main():
                 if model is not None:
                     st.session_state.update(model=model, exp=exp, names=names,
                                             legacy=legacy_info, frame=0, playing=False,
-                                            img_result=None, img_dets=None,
                                             frames=None, video_bytes=None)
                     ok = True
                     if legacy_info is not None and legacy_info["coverage"] < 0.95:
@@ -268,68 +267,37 @@ def main():
         return
 
     # ---------- STEP 2 ----------
-    st.markdown('<div class="step-card"><div class="step-title">Step 2 — Media: upload image/video, then Load Video</div>',
+    st.markdown('<div class="step-card"><div class="step-title">Step 2 — Video: upload mp4/avi, then Load Video</div>',
                 unsafe_allow_html=True)
-    media_file = st.file_uploader("🖼️ Image or video", type=["jpg", "jpeg", "png", "bmp", "mp4", "avi"])
+    media_file = st.file_uploader("🎬 Video file (.mp4 / .avi)", type=["mp4", "avi"])
     o1, o2, o3 = st.columns(3)
     conf = o1.slider("conf threshold", 0.05, 0.90, 0.25, 0.05)
     iou = o2.slider("nms iou", 0.20, 0.95, 0.70, 0.05)
     imgsz = o3.selectbox("imgsz (lower = faster)", [320, 480, 640], index=1)
-    load_media = st.button("🎬 Load Video / Run Image", type="primary", use_container_width=True)
+    load_media = st.button("🎬 Load Video", type="primary", use_container_width=True)
 
     if load_media:
         if not media_file:
-            st.error("Upload an image or video first.")
+            st.error("Upload a video first.")
         else:
             tmp = Path(tempfile.mkdtemp())
             mp = tmp / media_file.name
             mp.write_bytes(media_file.getvalue())
             model, names = st.session_state.model, st.session_state.names
-            if mp.suffix.lower() in (".mp4", ".avi"):
-                frames, fps, total_det, done = _process_video(
-                    model, names, mp, conf, iou, imgsz)
-                if done:
-                    vw_path = tmp / "result.mp4"
-                    _write_mp4(frames, fps, vw_path)
-                    st.session_state.update(
-                        frames=frames, fps=fps, frame=0, playing=False,
-                        media_kind="video", img_result=None,
-                        video_bytes=vw_path.read_bytes(),
-                        stats=f"{done} frames · {total_det} detections · {fps:.0f} fps")
-                    st.session_state.scrub = 0
-            else:
-                img = cv2.imread(str(mp), cv2.IMREAD_COLOR)
-                if img is None:
-                    st.error("Could not read image.")
-                else:
-                    with st.spinner("Running inference..."):
-                        out, dets = infer_image(model, img, names, conf, iou, imgsz)
-                    _, buf = cv2.imencode(".jpg", out)
-                    _, buf0 = cv2.imencode(".jpg", img)
-                    st.session_state.update(
-                        img_result=(buf0.tobytes(), buf.tobytes()),
-                        img_dets=[tuple(float(x) for x in d) for d in dets],
-                        media_kind="image", frames=None, video_bytes=None,
-                        stats=f"{len(dets)} detections")
+            frames, fps, total_det, done = _process_video(
+                model, names, mp, conf, iou, imgsz)
+            if done:
+                vw_path = tmp / "result.mp4"
+                _write_mp4(frames, fps, vw_path)
+                st.session_state.update(
+                    frames=frames, fps=fps, frame=0, playing=False,
+                    video_bytes=vw_path.read_bytes(),
+                    stats=f"{done} frames · {total_det} detections · {fps:.0f} fps")
+                st.session_state.scrub = 0
     st.markdown("</div>", unsafe_allow_html=True)
 
     # ---------- RESULTS ----------
-    if st.session_state.media_kind == "image" and st.session_state.img_result is not None:
-        st.subheader(f"Result — {st.session_state.stats}")
-        c1, c2 = st.columns(2)
-        c1.image(st.session_state.img_result[0], caption="input", use_column_width=True)
-        c2.image(st.session_state.img_result[1], caption="result", use_column_width=True)
-        st.download_button("⬇️ Download result image", st.session_state.img_result[1],
-                           "result.jpg", "image/jpeg")
-        if st.session_state.img_dets:
-            import pandas as pd
-            names = st.session_state.names
-            st.dataframe(pd.DataFrame(
-                [{"x1": d[0], "y1": d[1], "x2": d[2], "y2": d[3], "conf": d[4],
-                  "class": names[int(d[5])] if int(d[5]) < len(names) else int(d[5])}
-                 for d in st.session_state.img_dets]), use_container_width=True)
-
-    if st.session_state.media_kind == "video" and st.session_state.frames is not None:
+    if st.session_state.frames is not None:
         st.subheader(f"Result — {st.session_state.stats}")
         tab1, tab2 = st.tabs(["▶ Interactive player", "🎞 Full video"])
         with tab1:

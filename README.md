@@ -68,9 +68,9 @@ python tools/track.py --source 0 --weights YOLOX_outputs/yolov8_s/last.pth
 python tools/benchmark.py --weights yolov8n.pt --imgsz 640 --runs 50
 python tools/export.py --weights yolov8n.pt --format onnx -o yolov8n.onnx
 
-# 4. local validation UI — upload class file + exp file + weights + image/video
+# 4. local validation UI — upload class file + exp file + weights, Load Model, upload video, Load Video
 streamlit run tools/app.py
-# open http://localhost:8501, upload the 4 files, press Run inference
+# open http://localhost:8501: Load Model -> Load Video -> ▶ Start / ⏹ Stop player
 ```
 
 Full API (no `pip install ultralytics` needed — built in `yolox/engine/api.py`):
