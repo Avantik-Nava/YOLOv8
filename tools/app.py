@@ -24,6 +24,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import streamlit as st  # noqa: E402 (needed for the player fragment)
+
 from yolox.data import letterbox  # noqa: E402
 
 
@@ -59,6 +61,14 @@ def load_exp_file(path: Path):
     return mod.Exp()
 
 
+LEGACY_MARKERS = ("YOLOPAFPN", "YOLOXHead", "get_yolox_datadir", "SimOTA")
+
+
+def is_legacy_exp(path: Path):
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    return any(m in text for m in LEGACY_MARKERS)
+
+
 # ---------------- model ----------------
 _VERSION_BY_STEM = {16: "n", 32: "s", 48: "m", 64: "l", 80: "x"}
 
@@ -75,6 +85,16 @@ def _load_matching(model, sd):
 def build_model(exp_path: Path, weights_path: Path, names):
     exp = load_exp_file(exp_path)
     exp.num_classes = len(names)
+    if is_legacy_exp(exp_path):
+        # YOLOX-style exp + weights: build legacy model, auto-match arch
+        from yolox.models.legacy.loader import build_legacy
+        model, info, skipped = build_legacy(
+            weights_path, len(names),
+            depth_hint=float(getattr(exp, "depth", 0.33)),
+            width_hint=float(getattr(exp, "width", 0.50)),
+            act=getattr(exp, "act", "silu"))
+        exp.version = f"yolox-legacy d={info['depth']} w={info['width']}"
+        return model, exp, skipped, info
     model = exp.get_model()
     sd = torch.load(str(weights_path), map_location="cpu")
     sd = sd.get("model_state_dict", sd)
@@ -95,7 +115,7 @@ def build_model(exp_path: Path, weights_path: Path, names):
         raise RuntimeError(f"weights do not match exp (version={exp.version}, "
                            f"nc={len(names)}): {e}")
     model.eval()
-    return model, exp, skipped
+    return model, exp, skipped, None
 
 
 @torch.no_grad()
@@ -123,107 +143,216 @@ def infer_image(model, img_bgr, names, conf=0.25, iou=0.7, imgsz=640):
 def main():
     import streamlit as st
 
-    st.set_page_config(page_title="YOLOv8 local validation", layout="wide")
-    st.title("YOLOv8 — local validation UI")
+    st.set_page_config(page_title="Validation UI", layout="wide")
+    st.markdown("""
+    <style>
+    .block-container { padding-top: 1.2rem; }
+    .step-card { border: 1px solid #e0e0e0; border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 1rem; }
+    .step-title { font-size: 1.15rem; font-weight: 700; margin-bottom: .4rem; }
+    div.stButton > button { border-radius: 10px; font-weight: 600; }
+    </style>
+    """, unsafe_allow_html=True)
+    st.title("🎯 Model Validation Studio")
 
-    with st.sidebar:
-        st.header("1. Upload files")
-        class_file = st.file_uploader("Class file (.py / .txt / .yaml)", type=["py", "txt", "yaml", "yml"])
-        exp_file = st.file_uploader("Exp file (.py)", type=["py"])
-        weights_file = st.file_uploader("Weights (.pth)", type=["pth", "pt"])
-        st.header("2. Upload media")
-        media_file = st.file_uploader("Image or video", type=["jpg", "jpeg", "png", "bmp", "mp4", "avi"])
-        st.header("3. Settings")
-        conf = st.slider("conf threshold", 0.05, 0.9, 0.25, 0.05)
-        iou = st.slider("nms iou", 0.2, 0.95, 0.7, 0.05)
-        imgsz = st.selectbox("imgsz", [320, 480, 640], index=2)
-        run = st.button("Run inference", type="primary")
+    for k, v in {"model": None, "exp": None, "names": None, "model_info": "",
+                 "legacy": None, "media_kind": None, "img_result": None,
+                 "img_dets": None, "frames": None, "fps": 25.0,
+                 "video_bytes": None, "stats": "", "playing": False,
+                 "frame": 0}.items():
+        st.session_state.setdefault(k, v)
 
-    if not run:
-        st.info("Upload class file + exp file + weights + an image/video, then press **Run inference**.")
+    # status bar
+    s1, s2 = st.columns(2)
+    s1.success("✅ Model loaded" if st.session_state.model is not None else "⚪ Model: not loaded")
+    media_ok = st.session_state.img_result is not None or st.session_state.frames is not None
+    s2.success("✅ Media processed" if media_ok else "⚪ Media: not processed")
+
+    # ---------- STEP 1 ----------
+    st.markdown('<div class="step-card"><div class="step-title">Step 1 — Model: upload weights + classes + exp, then Load Model</div>',
+                unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    class_file = c1.file_uploader("📄 Class file (.py / .txt / .yaml)", type=["py", "txt", "yaml", "yml"])
+    exp_file = c2.file_uploader("📜 Exp file (.py)", type=["py"])
+    weights_file = c3.file_uploader("⚙️ Weights (.pth / .pt)", type=["pth", "pt"])
+    load_model = st.button("📦 Load Model", type="primary", use_container_width=True)
+
+    if load_model:
+        if not (class_file and exp_file and weights_file):
+            st.error("Upload all three files first (class file, exp file, weights).")
+        else:
+            tmp = Path(tempfile.mkdtemp())
+            cp, ep, wp = tmp / class_file.name, tmp / exp_file.name, tmp / weights_file.name
+            cp.write_bytes(class_file.getvalue())
+            ep.write_bytes(exp_file.getvalue())
+            wp.write_bytes(weights_file.getvalue())
+            try:
+                names = parse_classes(cp)
+            except Exception as e:
+                st.error(f"Class file parse failed: {e}")
+                names = None
+            if names is not None:
+                try:
+                    with st.spinner("Loading model..."):
+                        model, exp, skipped, legacy_info = build_model(ep, wp, names)
+                except Exception as e:
+                    st.error(f"Model build failed: {e}")
+                    model = None
+                if model is not None:
+                    st.session_state.update(model=model, exp=exp, names=names,
+                                            legacy=legacy_info, frame=0, playing=False,
+                                            img_result=None, img_dets=None,
+                                            frames=None, video_bytes=None)
+                    ok = True
+                    if legacy_info is not None and legacy_info["coverage"] < 0.95:
+                        st.error("Weights barely match any YOLOX size — check the weights file.")
+                        ok = False
+                    if ok:
+                        st.session_state.model_info = (
+                            f"exp `{exp.exp_name}` · arch `{exp.version}` · "
+                            f"{len(names)} classes" +
+                            (f" · YOLOX legacy coverage {legacy_info['coverage']*100:.1f}%"
+                             if legacy_info else ""))
+                        st.rerun()
+    if st.session_state.model is not None:
+        st.success("Loaded: " + st.session_state.model_info)
+        st.caption("Classes: " + ", ".join(st.session_state.names[:25]) +
+                   (" ..." if len(st.session_state.names) > 25 else ""))
+        if st.session_state.legacy is not None:
+            st.info(f"YOLOX legacy mode · depth={st.session_state.legacy['depth']} "
+                    f"width={st.session_state.legacy['width']} "
+                    f"reg_max={st.session_state.legacy['reg_max']}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if st.session_state.model is None:
+        st.info("⬆️ Load a model to unlock Step 2.")
         return
 
-    if not (class_file and exp_file and weights_file and media_file):
-        st.error("All four uploads are required (class file, exp file, weights, media).")
-        return
+    # ---------- STEP 2 ----------
+    st.markdown('<div class="step-card"><div class="step-title">Step 2 — Media: upload image/video, then Load Video</div>',
+                unsafe_allow_html=True)
+    media_file = st.file_uploader("🖼️ Image or video", type=["jpg", "jpeg", "png", "bmp", "mp4", "avi"])
+    o1, o2, o3 = st.columns(3)
+    conf = o1.slider("conf threshold", 0.05, 0.90, 0.25, 0.05)
+    iou = o2.slider("nms iou", 0.20, 0.95, 0.70, 0.05)
+    imgsz = o3.selectbox("imgsz (lower = faster)", [320, 480, 640], index=1)
+    load_media = st.button("🎬 Load Video / Run Image", type="primary", use_container_width=True)
 
-    tmp = Path(tempfile.mkdtemp())
-    cp = tmp / class_file.name
-    ep = tmp / exp_file.name
-    wp = tmp / weights_file.name
-    mp = tmp / media_file.name
-    cp.write_bytes(class_file.getvalue())
-    ep.write_bytes(exp_file.getvalue())
-    wp.write_bytes(weights_file.getvalue())
-    mp.write_bytes(media_file.getvalue())
+    if load_media:
+        if not media_file:
+            st.error("Upload an image or video first.")
+        else:
+            tmp = Path(tempfile.mkdtemp())
+            mp = tmp / media_file.name
+            mp.write_bytes(media_file.getvalue())
+            model, names = st.session_state.model, st.session_state.names
+            if mp.suffix.lower() in (".mp4", ".avi"):
+                frames, fps, total_det, done = _process_video(
+                    model, names, mp, conf, iou, imgsz)
+                if done:
+                    vw_path = tmp / "result.mp4"
+                    _write_mp4(frames, fps, vw_path)
+                    st.session_state.update(
+                        frames=frames, fps=fps, frame=0, playing=False,
+                        media_kind="video", img_result=None,
+                        video_bytes=vw_path.read_bytes(),
+                        stats=f"{done} frames · {total_det} detections · {fps:.0f} fps")
+                    st.session_state.scrub = 0
+            else:
+                img = cv2.imread(str(mp), cv2.IMREAD_COLOR)
+                if img is None:
+                    st.error("Could not read image.")
+                else:
+                    with st.spinner("Running inference..."):
+                        out, dets = infer_image(model, img, names, conf, iou, imgsz)
+                    _, buf = cv2.imencode(".jpg", out)
+                    _, buf0 = cv2.imencode(".jpg", img)
+                    st.session_state.update(
+                        img_result=(buf0.tobytes(), buf.tobytes()),
+                        img_dets=[tuple(float(x) for x in d) for d in dets],
+                        media_kind="image", frames=None, video_bytes=None,
+                        stats=f"{len(dets)} detections")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    try:
-        names = parse_classes(cp)
-    except Exception as e:
-        st.error(f"Class file parse failed: {e}")
-        return
-    st.write(f"Classes ({len(names)}): {', '.join(names[:20])}" + (" ..." if len(names) > 20 else ""))
-
-    try:
-        model, exp, skipped = build_model(ep, wp, names)
-    except Exception as e:
-        st.error(f"Model build failed: {e}")
-        return
-    if skipped:
-        st.warning(f"Weights partially matched ({len(skipped)} layers skipped — "
-                   "usually a class-count difference vs training. "
-                   "If labels look wrong, retrain for your class count.")
-    st.success(f"Loaded exp `{exp.exp_name}` (yolov8-{exp.version}, nc={len(names)}) + weights `{weights_file.name}`")
-
-    is_video = mp.suffix.lower() in (".mp4", ".avi")
-    if not is_video:
-        img = cv2.imread(str(mp), cv2.IMREAD_COLOR)
-        if img is None:
-            st.error("Could not read image.")
-            return
-        out, dets = infer_image(model, img, names, conf, iou, imgsz)
-        st.write(f"Detections: {len(dets)}")
+    # ---------- RESULTS ----------
+    if st.session_state.media_kind == "image" and st.session_state.img_result is not None:
+        st.subheader(f"Result — {st.session_state.stats}")
         c1, c2 = st.columns(2)
-        c1.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption="input", use_column_width=True)
-        c2.image(cv2.cvtColor(out, cv2.COLOR_BGR2RGB), caption="result", use_column_width=True)
-        _, buf = cv2.imencode(".jpg", out)
-        st.download_button("Download result image", buf.tobytes(), "result.jpg", "image/jpeg")
-        if len(dets):
+        c1.image(st.session_state.img_result[0], caption="input", use_column_width=True)
+        c2.image(st.session_state.img_result[1], caption="result", use_column_width=True)
+        st.download_button("⬇️ Download result image", st.session_state.img_result[1],
+                           "result.jpg", "image/jpeg")
+        if st.session_state.img_dets:
             import pandas as pd
-            df = pd.DataFrame([{"x1": d[0], "y1": d[1], "x2": d[2], "y2": d[3],
-                                          "conf": d[4], "class": names[int(d[5])] if int(d[5]) < len(names) else int(d[5])}
-                                         for d in dets])
-            st.dataframe(df)
+            names = st.session_state.names
+            st.dataframe(pd.DataFrame(
+                [{"x1": d[0], "y1": d[1], "x2": d[2], "y2": d[3], "conf": d[4],
+                  "class": names[int(d[5])] if int(d[5]) < len(names) else int(d[5])}
+                 for d in st.session_state.img_dets]), use_container_width=True)
+
+    if st.session_state.media_kind == "video" and st.session_state.frames is not None:
+        st.subheader(f"Result — {st.session_state.stats}")
+        tab1, tab2 = st.tabs(["▶ Interactive player", "🎞 Full video"])
+        with tab1:
+            _player(st.session_state.frames, st.session_state.fps)
+        with tab2:
+            st.video(st.session_state.video_bytes)
+        st.download_button("⬇️ Download result video", st.session_state.video_bytes,
+                           "result.mp4", "video/mp4")
+
+
+def _process_video(model, names, mp, conf, iou, imgsz, max_frames=1200):
+    cap = cv2.VideoCapture(str(mp))
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
+    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frames, total_det, done = [], 0, 0
+    prog = st.progress(0, text="Processing video...")
+    while True:
+        ret, frame = cap.read()
+        if not ret or done >= max_frames:
+            break
+        out, dets = infer_image(model, frame, names, conf, iou, imgsz)
+        total_det += len(dets)
+        small = out if out.shape[1] <= 640 else cv2.resize(
+            out, (640, int(out.shape[0] * 640 / out.shape[1])))
+        _, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        frames.append(buf.tobytes())
+        done += 1
+        if n_frames > 0:
+            prog.progress(min(done / n_frames, 1.0), text=f"Frame {done}/{n_frames}")
+    cap.release()
+    if done >= max_frames:
+        st.warning(f"Trimmed to first {max_frames} frames.")
+    prog.empty()
+    return frames, fps, total_det, done
+
+
+def _write_mp4(frames_jpg, fps, out_path):
+    import numpy as np
+    first = cv2.imdecode(np.frombuffer(frames_jpg[0], np.uint8), cv2.IMREAD_COLOR)
+    h, w = first.shape[:2]
+    vw = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+    for b in frames_jpg:
+        vw.write(cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR))
+    vw.release()
+
+
+@st.fragment(run_every=0.15)
+def _player(frames, fps):
+    """Interactive player: Start/Stop + frame scrubber (auto-advances while playing)."""
+    n = len(frames)
+    b1, b2, _sp = st.columns([1, 1, 6])
+    if b1.button("▶ Start", use_container_width=True):
+        st.session_state.playing = True
+    if b2.button("⏹ Stop", use_container_width=True):
+        st.session_state.playing = False
+    if st.session_state.playing:
+        st.session_state.frame = (st.session_state.frame + max(1, round(fps * 0.15))) % n
     else:
-        cap = cv2.VideoCapture(str(mp))
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        out_path = tmp / "result.mp4"
-        vw = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
-        prog = st.progress(0, text="Processing video...")
-        total_det, done = 0, 0
-        preview = None
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            out, dets = infer_image(model, frame, names, conf, iou, imgsz)
-            total_det += len(dets)
-            vw.write(out)
-            done += 1
-            if preview is None:
-                preview = out
-            if n_frames > 0:
-                prog.progress(min(done / n_frames, 1.0), text=f"Frame {done}/{n_frames}")
-        cap.release()
-        vw.release()
-        st.write(f"Frames: {done}, total detections: {total_det}")
-        if preview is not None:
-            st.image(cv2.cvtColor(preview, cv2.COLOR_BGR2RGB), caption="first frame", use_column_width=True)
-        st.video(str(out_path))
-        st.download_button("Download result video", out_path.read_bytes(), "result.mp4", "video/mp4")
+        st.session_state.frame = st.slider(
+            "Scrub frames", 0, n - 1, min(st.session_state.frame, n - 1), key="scrub")
+    st.image(frames[st.session_state.frame],
+             caption=f"frame {st.session_state.frame + 1}/{n}")
+    st.caption("▶ playing — press ⏹ Stop to pause" if st.session_state.playing else "⏸ paused")
 
 
 if __name__ == "__main__":
