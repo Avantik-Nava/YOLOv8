@@ -619,6 +619,13 @@ def _ssh_alive():
 
 def _export_onnx_tmp(model, imgsz=640):
     """Export the session model to a temp single-file ONNX (for GPU shipping)."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return _export_onnx_tmp_inner(model, imgsz)
+
+
+def _export_onnx_tmp_inner(model, imgsz=640):
     import torch
     tmp = Path(tempfile.mkdtemp()) / "model_ship.onnx"
     was_training = model.training
