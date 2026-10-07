@@ -53,10 +53,15 @@ def main():
         exp.test_size = (args.test_size, args.test_size)
     print(exp)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if args.devices is not None and torch.cuda.is_available():
+        torch.cuda.set_device(args.devices)
+        device = torch.device(f"cuda:{args.devices}")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = exp.get_model().to(device).eval()
     if args.ckpt:
-        ckpt = torch.load(args.ckpt, map_location=device)
+        from yolox.utils import load_checkpoint
+        ckpt = load_checkpoint(args.ckpt, map_location=device)
         model.load_state_dict(ckpt.get("model_state_dict", ckpt), strict=False)
         print(f"loaded {args.ckpt}")
 

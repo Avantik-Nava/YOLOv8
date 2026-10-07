@@ -22,7 +22,8 @@ def main():
     from yolox.models import YOLOv8
     model = YOLOv8(version=args.version, num_classes=args.num_classes).eval()
     if args.ckpt and Path(args.ckpt).exists():
-        sd = torch.load(args.ckpt, map_location="cpu")
+        from yolox.utils import load_checkpoint
+        sd = load_checkpoint(args.ckpt, map_location="cpu")
         model.load_state_dict(sd.get("model_state_dict", sd), strict=False)
     dummy = torch.randn(1, 3, args.imgsz, args.imgsz)
     torch.onnx.export(model, dummy, args.output, opset_version=args.opset,

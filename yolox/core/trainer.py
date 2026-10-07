@@ -14,7 +14,12 @@ class Trainer:
     def __init__(self, exp, args):
         self.exp = exp
         self.args = args
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        dev_id = getattr(args, "devices", None)
+        if dev_id is not None and torch.cuda.is_available():
+            torch.cuda.set_device(dev_id)
+            self.device = torch.device(f"cuda:{dev_id}")
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.fp16 = getattr(args, "fp16", False) and self.device.type == "cuda"
         self.max_epoch = exp.max_epoch
         self.no_aug_epochs = exp.no_aug_epochs
@@ -41,7 +46,8 @@ class Trainer:
         scaler = torch.amp.GradScaler("cuda", enabled=self.fp16)
 
         if getattr(args, "ckpt", None):
-            ckpt = torch.load(args.ckpt, map_location=self.device)
+            from yolox.utils import load_checkpoint
+            ckpt = load_checkpoint(args.ckpt, map_location=self.device)
             model.load_state_dict(ckpt.get("model_state_dict", ckpt), strict=False)
             print(f"resumed {args.ckpt}")
 
@@ -57,7 +63,7 @@ class Trainer:
             tot, n, t0 = 0.0, 0, time.time()
             for imgs, labels in train_loader:
                 num_iter += 1
-                imgs, labels = imgs.to(self.device), labels.to(self.device)
+                imgs, labels = imgs.to(self.device, non_blocking=True), labels.to(self.device, non_blocking=True)
                 scheduler.update_lr(num_iter, optimizer)
                 optimizer.zero_grad()
                 with torch.amp.autocast("cuda", enabled=self.fp16):

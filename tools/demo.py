@@ -28,7 +28,7 @@ def make_parser():
     parser.add_argument("--save_result", action="store_true", help="save image/video result")
     parser.add_argument("-f", "--exp_file", default=None, type=str)
     parser.add_argument("-c", "--ckpt", default=None, type=str, help="ckpt for eval")
-    parser.add_argument("--device", default="cpu", type=str, help="device to run model")
+    parser.add_argument("--device", default="gpu", type=str, help="device to run model")
     parser.add_argument("--conf", default=0.25, type=float, help="test conf")
     parser.add_argument("--nms", default=0.7, type=float, help="nms threshold")
     parser.add_argument("--tsize", default=640, type=int, help="test image size")
@@ -114,7 +114,8 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available() or args.device == "cpu" else "cpu")
     model = exp.get_model().to(device).eval()
     if args.ckpt:
-        ckpt = torch.load(args.ckpt, map_location=device)
+        from yolox.utils import load_checkpoint
+        ckpt = load_checkpoint(args.ckpt, map_location=device)
         model.load_state_dict(ckpt.get("model_state_dict", ckpt), strict=False)
         print(f"loaded {args.ckpt}")
 

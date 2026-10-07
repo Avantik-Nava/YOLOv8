@@ -115,7 +115,7 @@ def _load_matching(model, sd):
     return keep, skipped
 
 
-def build_model(exp_path: Path, weights_path: Path, names):
+def build_model(exp_path: Path, weights_path: Path, names, device_choice="auto"):
     if is_legacy_exp(exp_path):
         # YOLOX-style exp + weights: values are AST-parsed (file is NEVER
         # executed, so its imports cannot fail), arch is auto-matched.
@@ -132,7 +132,7 @@ def build_model(exp_path: Path, weights_path: Path, names):
             version=f"yolox-legacy d={info['depth']} w={info['width']}",
             depth=info["depth"], width=info["width"],
             num_classes=len(names))
-        return _speedup(model), exp, skipped, info
+        return _speedup(model, _pick_device(device_choice)), exp, skipped, info
     exp = load_exp_file(exp_path)
     exp.num_classes = len(names)
     model = exp.get_model()
@@ -156,7 +156,7 @@ def build_model(exp_path: Path, weights_path: Path, names):
         raise RuntimeError(f"weights do not match exp (version={exp.version}, "
                            f"nc={len(names)}): {e}")
     model.eval()
-    return _speedup(model), exp, skipped, None
+    return _speedup(model, _pick_device(device_choice)), exp, skipped, None
 
 
 def _draw(img_bgr, dets, names):
@@ -167,6 +167,13 @@ def _draw(img_bgr, dets, names):
         cv2.putText(out, label, (int(x1), max(int(y1) - 6, 12)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     return out
+
+
+def _model_device(model):
+    try:
+        return next(model.parameters()).device
+    except Exception:
+        return torch.device("cpu")
 
 
 @torch.no_grad()
@@ -192,7 +199,10 @@ def _infer_batch(model, frames_bgr, names, conf=0.25, iou=0.7, imgsz=640):
         pre.append(torch.from_numpy(canvas.transpose(2, 0, 1)).float() / 255.0)
         meta.append((w0, h0, s, dw, dh))
     t = torch.stack(pre).contiguous(memory_format=torch.channels_last)
-    dets_list = model.predict(t, conf_threshold=conf, iou_threshold=iou)
+    dev = _model_device(model)
+    with torch.amp.autocast("cuda", enabled=(dev.type == "cuda")):
+        dets_list = model.predict(t.to(dev, non_blocking=True),
+                                  conf_threshold=conf, iou_threshold=iou)
     outs = []
     for f, dets, (w0, h0, s, dw, dh) in zip(frames_bgr, dets_list, meta):
         dets = dets.cpu().numpy()
@@ -238,6 +248,10 @@ def main():
     class_file = c1.file_uploader("📄 Class file (.py / .txt / .yaml)", type=["py", "txt", "yaml", "yml"])
     exp_file = c2.file_uploader("📜 Exp file (.py)", type=["py"])
     weights_file = c3.file_uploader("⚙️ Weights (.pth / .pt)", type=["pth", "pt"])
+    d1, d2 = st.columns([1, 3])
+    device_choice = d1.selectbox("Device", ["auto", "cuda", "cpu"], index=0,
+                                 help="auto = GPU if available. Reload model after changing.")
+    d2.caption("GPU = ~20-50x faster. Model loads onto the selected device.")
     load_model = st.button("📦 Load Model", type="primary", use_container_width=True)
 
     if load_model:
@@ -257,7 +271,8 @@ def main():
             if names is not None:
                 try:
                     with st.spinner("Loading model..."):
-                        model, exp, skipped, legacy_info = build_model(ep, wp, names)
+                        model, exp, skipped, legacy_info = build_model(
+                            ep, wp, names, device_choice=device_choice)
                 except Exception as e:
                     st.error(f"Model build failed: {e}")
                     model = None
@@ -270,9 +285,11 @@ def main():
                         st.error("Weights barely match any YOLOX size — check the weights file.")
                         ok = False
                     if ok:
+                        dev = _model_device(model)
+                        amp = " · AMP fp16" if dev.type == "cuda" else ""
                         st.session_state.model_info = (
                             f"exp `{exp.exp_name}` · arch `{exp.version}` · "
-                            f"{len(names)} classes" +
+                            f"{len(names)} classes · device `{dev}`{amp}" +
                             (f" · YOLOX legacy coverage {legacy_info['coverage']*100:.1f}%"
                              if legacy_info else ""))
                         st.rerun()
@@ -374,18 +391,36 @@ def main():
                     st.info("Boxes exist at low conf — lower the conf slider (try 0.05–0.10) and reload the video.")
 
 
-def _speedup(model):
-    """CPU throughput: all threads + channels-last memory format."""
+def _pick_device(choice="auto"):
+    if choice == "cuda" and torch.cuda.is_available():
+        return torch.device("cuda")
+    if choice == "cpu":
+        return torch.device("cpu")
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _speedup(model, device=None):
+    """Throughput: device placement + all CPU threads + channels-last convs."""
     import os
-    try:
-        torch.set_num_threads(max(1, os.cpu_count() or 4))
-    except Exception:
-        pass
+    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    if device.type == "cpu":
+        try:
+            torch.set_num_threads(max(1, os.cpu_count() or 4))
+        except Exception:
+            pass
     try:
         model.to(memory_format=torch.channels_last)
     except Exception:
         pass
     return model
+
+
+def _amp_enabled(model):
+    try:
+        return next(model.parameters()).is_cuda
+    except Exception:
+        return False
 
 
 def _record_rtsp(st, url, seconds, tmp):
@@ -440,7 +475,9 @@ def _diagnose(model, names, frame_bgr, imgsz=640):
         canvas, s, (_dw, _dh) = letterbox(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB), imgsz)
     t = torch.from_numpy(canvas.transpose(2, 0, 1)).float().unsqueeze(0) / 255.0
     t = t.contiguous(memory_format=torch.channels_last)
-    raw = model(t)
+    dev = _model_device(model)
+    with torch.amp.autocast("cuda", enabled=(dev.type == "cuda")):
+        raw = model(t.to(dev, non_blocking=True))
     if legacy:
         r = raw[0]
         scores = (r[:, 4:5] * r[:, 5:])  # obj * cls  [N, nc]
