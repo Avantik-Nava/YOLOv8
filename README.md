@@ -65,6 +65,10 @@ python tools/track.py --source 0 --weights YOLOv8_outputs/yolov8_s/last.pth
 python tools/benchmark.py --weights yolov8n.pt --imgsz 640 --runs 50
 python tools/export.py --weights yolov8n.pt --format onnx -o yolov8n.onnx
 python tools/export.py --weights yolov8n.pt --format torchscript -o yolov8n.torchscript
+
+# 4. local validation UI — upload class file + exp file + weights + image/video
+streamlit run tools/app.py
+# open http://localhost:8501, upload the 4 files, press Run inference
 ```
 
 Full API (no `pip install ultralytics` needed — built in `yolo/engine/api.py`):
