@@ -135,7 +135,8 @@ def build_model(exp_path: Path, weights_path: Path, names):
     exp = load_exp_file(exp_path)
     exp.num_classes = len(names)
     model = exp.get_model()
-    sd = torch.load(str(weights_path), map_location="cpu")
+    from yolox.utils import load_checkpoint
+    sd = load_checkpoint(weights_path, map_location="cpu")
     sd = sd.get("model_state_dict", sd)
     try:
         _, skipped = _load_matching(model, sd)
@@ -253,7 +254,7 @@ def main():
                              if legacy_info else ""))
                         st.rerun()
     if st.session_state.model is not None:
-        st.success("Loaded: " + st.session_state.model_info)
+        st.success("✅ Model loaded successfully: " + st.session_state.model_info)
         st.caption("Classes: " + ", ".join(st.session_state.names[:25]) +
                    (" ..." if len(st.session_state.names) > 25 else ""))
         if st.session_state.legacy is not None:

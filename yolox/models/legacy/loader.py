@@ -10,7 +10,8 @@ CANDIDATES = [(0.33, 0.25), (0.33, 0.50), (0.67, 0.75), (1.00, 1.00), (1.00, 1.2
 
 
 def _norm_ckpt(path):
-    sd = torch.load(str(path), map_location="cpu")
+    from yolox.utils import load_checkpoint
+    sd = load_checkpoint(path, map_location="cpu")
     if isinstance(sd, dict):
         for k in ("model_state_dict", "model"):
             if k in sd and isinstance(sd[k], dict):

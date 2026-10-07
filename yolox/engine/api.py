@@ -59,7 +59,8 @@ class YOLO:
         p = Path(str(weights))
         if p.exists():
             try:
-                sd = torch.load(p, map_location="cpu")
+                from yolox.utils import load_checkpoint
+                sd = load_checkpoint(p, map_location="cpu")
                 self.model.load_state_dict(sd.get("model_state_dict", sd), strict=False)
                 print(f"loaded {p}")
             except Exception as e:
