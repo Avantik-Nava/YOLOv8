@@ -45,6 +45,9 @@ class YOLOX(nn.Module):
             conf, cls_id = scores.max(-1)
             keep = conf > conf_threshold
             boxes, conf, cls_id = boxes[keep], conf[keep], cls_id[keep].float()
+            if boxes.shape[0] > 2000:  # cap before NMS (low-conf floods on CPU)
+                top = conf.argsort(descending=True)[:2000]
+                boxes, conf, cls_id = boxes[top], conf[top], cls_id[top]
             if boxes.shape[0] == 0:
                 out.append(torch.zeros((0, 6), device=images.device))
                 continue
