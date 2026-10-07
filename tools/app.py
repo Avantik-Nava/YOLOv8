@@ -61,6 +61,38 @@ def load_exp_file(path: Path):
     return mod.Exp()
 
 
+def parse_exp_meta(path: Path):
+    """Read exp hyper-params WITHOUT executing the file (AST only).
+
+    YOLOX-style exps can import things that don't exist here
+    (get_yolox_datadir, YOLOX models, loguru...). Parsing values with AST
+    means those imports can never break model loading.
+    """
+    import ast
+    meta = {"num_classes": 80, "depth": 0.33, "width": 0.50,
+            "act": "silu", "exp_name": path.stem}
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return meta
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "Exp":
+            for stmt in node.body:
+                if isinstance(stmt, ast.FunctionDef) and stmt.name == "__init__":
+                    for sub in ast.walk(stmt):
+                        if isinstance(sub, ast.Assign):
+                            for t in sub.targets:
+                                if (isinstance(t, ast.Attribute)
+                                        and isinstance(t.value, ast.Name)
+                                        and t.value.id == "self"
+                                        and t.attr in meta):
+                                    try:
+                                        meta[t.attr] = ast.literal_eval(sub.value)
+                                    except Exception:
+                                        pass
+    return meta
+
+
 LEGACY_MARKERS = ("YOLOPAFPN", "YOLOXHead", "get_yolox_datadir", "SimOTA")
 
 
@@ -83,18 +115,25 @@ def _load_matching(model, sd):
 
 
 def build_model(exp_path: Path, weights_path: Path, names):
-    exp = load_exp_file(exp_path)
-    exp.num_classes = len(names)
     if is_legacy_exp(exp_path):
-        # YOLOX-style exp + weights: build legacy model, auto-match arch
+        # YOLOX-style exp + weights: values are AST-parsed (file is NEVER
+        # executed, so its imports cannot fail), arch is auto-matched.
+        from types import SimpleNamespace
         from yolox.models.legacy.loader import build_legacy
+        meta = parse_exp_meta(exp_path)
         model, info, skipped = build_legacy(
             weights_path, len(names),
-            depth_hint=float(getattr(exp, "depth", 0.33)),
-            width_hint=float(getattr(exp, "width", 0.50)),
-            act=getattr(exp, "act", "silu"))
-        exp.version = f"yolox-legacy d={info['depth']} w={info['width']}"
+            depth_hint=float(meta.get("depth", 0.33)),
+            width_hint=float(meta.get("width", 0.50)),
+            act=meta.get("act", "silu") or "silu")
+        exp = SimpleNamespace(
+            exp_name=str(meta.get("exp_name", exp_path.stem)),
+            version=f"yolox-legacy d={info['depth']} w={info['width']}",
+            depth=info["depth"], width=info["width"],
+            num_classes=len(names))
         return model, exp, skipped, info
+    exp = load_exp_file(exp_path)
+    exp.num_classes = len(names)
     model = exp.get_model()
     sd = torch.load(str(weights_path), map_location="cpu")
     sd = sd.get("model_state_dict", sd)
