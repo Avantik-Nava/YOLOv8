@@ -11,4 +11,5 @@ onnx>=1.10.0
 onnxruntime>=1.10.0
 pytest>=6.0.0
 streamlit>=1.30.0  # local validation UI: streamlit run tools/app.py
+paramiko>=3.0.0  # GPU-server SSH runs from the validation UI (local only)
 pycocotools>=2.0.0  # optional: COCO mAP via official evaluator (fallback built-in if missing)

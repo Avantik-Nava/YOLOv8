@@ -30,29 +30,10 @@ import streamlit as st  # noqa: E402 (needed for the player fragment)
 from yolox.data import letterbox  # noqa: E402
 
 
-# ---------------- parsing ----------------
-def parse_classes(path: Path):
-    suf = path.suffix.lower()
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    if suf == ".txt":
-        names = [l.strip() for l in text.splitlines() if l.strip()]
-        return names
-    if suf in (".yaml", ".yml"):
-        import yaml
-        d = yaml.safe_load(text)
-        names = d.get("names", [])
-        return [str(n) for n in names]
-    # .py — find VOC_CLASSES / NAMES / CLASSES tuple or list (ignore # comments)
-    code = "\n".join(line.split("#")[0] for line in text.splitlines())
-    m = re.search(r"(?:VOC_CLASSES|NAMES|CLASSES)\s*=\s*\((.*?)\)", code, re.S)
-    if not m:
-        m = re.search(r"(?:VOC_CLASSES|NAMES|CLASSES)\s*=\s*\[(.*?)\]", code, re.S)
-    if not m:
-        raise ValueError("No VOC_CLASSES/NAMES found in .py file")
-    names = re.findall(r"['\"]([^'\"]+)['\"]", m.group(1))
-    if not names:
-        raise ValueError("Could not parse class names from .py file")
-    return names
+# ---------------- parsing (shared helpers live in yolox.utils.exp_parse) ----------------
+from yolox.utils.exp_parse import (  # noqa: E402
+    is_legacy_exp, parse_classes, parse_exp_meta,
+)
 
 
 def load_exp_file(path: Path):
@@ -60,46 +41,6 @@ def load_exp_file(path: Path):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.Exp()
-
-
-def parse_exp_meta(path: Path):
-    """Read exp hyper-params WITHOUT executing the file (AST only).
-
-    YOLOX-style exps can import things that don't exist here
-    (get_yolox_datadir, YOLOX models, loguru...). Parsing values with AST
-    means those imports can never break model loading.
-    """
-    import ast
-    meta = {"num_classes": 80, "depth": 0.33, "width": 0.50,
-            "act": "silu", "exp_name": path.stem}
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
-    except Exception:
-        return meta
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == "Exp":
-            for stmt in node.body:
-                if isinstance(stmt, ast.FunctionDef) and stmt.name == "__init__":
-                    for sub in ast.walk(stmt):
-                        if isinstance(sub, ast.Assign):
-                            for t in sub.targets:
-                                if (isinstance(t, ast.Attribute)
-                                        and isinstance(t.value, ast.Name)
-                                        and t.value.id == "self"
-                                        and t.attr in meta):
-                                    try:
-                                        meta[t.attr] = ast.literal_eval(sub.value)
-                                    except Exception:
-                                        pass
-    return meta
-
-
-LEGACY_MARKERS = ("YOLOPAFPN", "YOLOXHead", "get_yolox_datadir", "SimOTA")
-
-
-def is_legacy_exp(path: Path):
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    return any(m in text for m in LEGACY_MARKERS)
 
 
 # ---------------- model ----------------
@@ -232,14 +173,17 @@ def main():
     for k, v in {"model": None, "exp": None, "names": None, "model_info": "",
                  "legacy": None, "frames": None, "fps": 25.0,
                  "video_bytes": None, "stats": "", "playing": False,
-                 "frame": 0}.items():
+                 "frame": 0, "mid_raw": None, "ssh": None, "ssh_info": "",
+                 "ssh_cred": None, "remote_ready": False, "remote_log": "",
+                 "cls_txt": None, "onnx_path": None}.items():
         st.session_state.setdefault(k, v)
 
     # status bar
-    s1, s2 = st.columns(2)
+    s1, s2, s3 = st.columns(3)
     s1.success("✅ Model loaded" if st.session_state.model is not None else "⚪ Model: not loaded")
     media_ok = st.session_state.frames is not None
     s2.success("✅ Video processed" if media_ok else "⚪ Video: not processed")
+    s3.success("✅ GPU server" if _ssh_alive() else "⚪ GPU server: local mode")
 
     # ---------- STEP 1 ----------
     st.markdown('<div class="step-card"><div class="step-title">Step 1 — Model: upload weights + classes + exp, then Load Model</div>',
@@ -307,6 +251,55 @@ def main():
         st.info("⬆️ Load a model to unlock Step 2.")
         return
 
+    # ---------- STEP 1.5 : GPU server ----------
+    st.markdown('<div class="step-card"><div class="step-title">Step 1.5 — GPU server over SSH (optional, much faster)</div>',
+                unsafe_allow_html=True)
+    st.caption("Code stays on this machine. Only model.onnx + script + video are sent; "
+               "inference runs on the server, the result video comes back here. "
+               "Credentials live only in memory, never on disk.")
+    g1, g2, g3, g4 = st.columns([2, 1, 1, 1])
+    ssh_host = g1.text_input("Host", value=(st.session_state.ssh_cred or {}).get("host", "172.32.32.21"))
+    ssh_user = g2.text_input("User", value=(st.session_state.ssh_cred or {}).get("user", "navavisionai"))
+    ssh_port = g3.number_input("Port", 1, 65535, 22)
+    ssh_pass = g4.text_input("Password", type="password")
+    ssh_key = st.file_uploader("Key file instead of password (optional)", type=["pem", "key", "ppk", "openssh"])
+    b1, b2 = st.columns(2)
+    if b1.button("🔌 Connect to GPU", use_container_width=True):
+        try:
+            with st.spinner("Connecting..."):
+                from tools.remote_gpu import connect, gpu_info, ensure_env
+                client, ver = connect(
+                    ssh_host, ssh_user,
+                    password=ssh_pass or None,
+                    key_bytes=ssh_key.getvalue() if ssh_key else None, port=int(ssh_port))
+                st.session_state.ssh = client
+                st.session_state.ssh_cred = {"host": ssh_host, "user": ssh_user, "port": int(ssh_port)}
+                st.session_state.ssh_info = f"{ver} · {gpu_info(client)}"
+                env_log = ensure_env(client)
+                st.session_state.remote_log = "\n".join(env_log)
+                st.session_state.remote_ready = False  # re-ship model below
+        except Exception as e:
+            st.session_state.ssh = None
+            st.error(f"SSH failed: {e}")
+    if b2.button("🔌 Disconnect", use_container_width=True):
+        try:
+            if st.session_state.ssh is not None:
+                st.session_state.ssh.close()
+        except Exception:
+            pass
+        st.session_state.update(ssh=None, ssh_info="", ssh_cred=None, remote_ready=False)
+    if st.session_state.ssh_info:
+        st.success("Connected: " + st.session_state.ssh_info)
+        if st.session_state.remote_log:
+            with st.expander("Server environment"):
+                st.code(st.session_state.remote_log)
+        if st.session_state.remote_ready:
+            st.success("✅ Model shipped to GPU — videos will run remotely.")
+        elif st.session_state.model is not None:
+            if st.button("📤 Ship current model to GPU", use_container_width=True):
+                _ship_model_to_gpu()
+    st.markdown("</div>", unsafe_allow_html=True)
+
     # ---------- STEP 2 ----------
     st.markdown('<div class="step-card"><div class="step-title">Step 2 — Video: file upload or RTSP, then Load Video</div>',
                 unsafe_allow_html=True)
@@ -345,22 +338,25 @@ def main():
                 mp = tmp / media_file.name
                 mp.write_bytes(media_file.getvalue())
         if mp is not None:
-            model, names = st.session_state.model, st.session_state.names
-            frames, fps, total_det, done, calls, speed, mid_raw = _process_video(
-                model, names, mp, conf, iou, imgsz, batch=batch, stride=stride)
-            if done:
-                vw_path = tmp / "result.mp4"
-                _write_mp4(frames, fps, vw_path)
-                _, mid_buf = cv2.imencode(".jpg", mid_raw if mid_raw is not None else
-                                          cv2.imdecode(np.frombuffer(frames[0], np.uint8),
-                                                       cv2.IMREAD_COLOR))
-                st.session_state.update(
-                    frames=frames, fps=fps, frame=0, playing=False,
-                    video_bytes=vw_path.read_bytes(),
-                    mid_raw=mid_buf.tobytes(),
-                    stats=(f"{done} frames · {total_det} detections · "
-                           f"{speed:.1f} fps processing ({calls} forwards)"))
-                st.session_state.scrub = 0
+            if _ssh_alive() and st.session_state.remote_ready:
+                _load_video_remote(mp, conf, iou, imgsz, batch, stride)
+            else:
+                model, names = st.session_state.model, st.session_state.names
+                frames, fps, total_det, done, calls, speed, mid_raw = _process_video(
+                    model, names, mp, conf, iou, imgsz, batch=batch, stride=stride)
+                if done:
+                    vw_path = tmp / "result.mp4"
+                    _write_mp4(frames, fps, vw_path)
+                    _, mid_buf = cv2.imencode(".jpg", mid_raw if mid_raw is not None else
+                                              cv2.imdecode(np.frombuffer(frames[0], np.uint8),
+                                                           cv2.IMREAD_COLOR))
+                    st.session_state.update(
+                        frames=frames, fps=fps, frame=0, playing=False,
+                        video_bytes=vw_path.read_bytes(),
+                        mid_raw=mid_buf.tobytes(),
+                        stats=(f"{done} frames · {total_det} detections · "
+                               f"{speed:.1f} fps processing ({calls} forwards, local)"))
+                    st.session_state.scrub = 0
     st.markdown("</div>", unsafe_allow_html=True)
 
     # ---------- RESULTS ----------
@@ -581,6 +577,111 @@ def _write_mp4(frames_jpg, fps, out_path):
     for b in frames_jpg:
         vw.write(cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR))
     vw.release()
+
+
+def _frames_from_mp4(mp4_path, max_frames=1200, max_w=640):
+    """Decode an mp4 into preview JPEG bytes + fps (for the local player)."""
+    import numpy as np
+    cap = cv2.VideoCapture(str(mp4_path))
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
+    frames = []
+    while len(frames) < max_frames:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if frame.shape[1] > max_w:
+            frame = cv2.resize(frame, (max_w, int(frame.shape[0] * max_w / frame.shape[1])))
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        frames.append(buf.tobytes())
+    cap.release()
+    return frames, fps
+
+
+def _ssh_alive():
+    try:
+        c = st.session_state.get("ssh")
+        return c is not None and c.get_transport() is not None and c.get_transport().is_active()
+    except Exception:
+        return False
+
+
+def _export_onnx_tmp(model, imgsz=640):
+    """Export the session model to a temp single-file ONNX (for GPU shipping)."""
+    import torch
+    tmp = Path(tempfile.mkdtemp()) / "model_ship.onnx"
+    was_training = model.training
+    model.eval()
+    dev = _model_device(model)
+    model_cpu = model.to("cpu").float()
+    dummy = torch.randn(1, 3, imgsz, imgsz)
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    torch.onnx.export(model_cpu, dummy, str(tmp), opset_version=18,
+                      input_names=["input"], output_names=["output"],
+                      dynamic_axes={"input": {0: "batch"}, "output": {0: "batch"}},
+                      dynamo=False)
+    model.to(dev)
+    if was_training:
+        model.train()
+    return tmp
+
+
+def _ship_model_to_gpu():
+    """Export session model to ONNX and upload + script to the GPU box."""
+    if st.session_state.model is None or not _ssh_alive():
+        st.error("Load a model and connect to the GPU first.")
+        return
+    try:
+        with st.spinner("Exporting ONNX + shipping to GPU..."):
+            from tools.remote_gpu import prepare_job, ensure_env
+            onnx_path = _export_onnx_tmp(st.session_state.model)
+            tmp = Path(tempfile.mkdtemp())
+            cls_txt = tmp / "classes.txt"
+            cls_txt.write_text("\n".join(st.session_state.names), encoding="utf-8")
+            st.session_state.cls_txt = str(cls_txt)
+            st.session_state.onnx_path = str(onnx_path)
+            prepare_job(st.session_state.ssh, onnx_path)
+            st.session_state.remote_ready = True
+            st.session_state.remote_log = "model.onnx + infer_onnx.py shipped to ~/yolo_remote"
+            st.success("✅ Model shipped to GPU — videos will run remotely.")
+    except Exception as e:
+        st.session_state.remote_ready = False
+        st.error(f"Ship failed: {e}")
+
+
+def _load_video_remote(mp, conf, iou, imgsz, batch, stride):
+    """Upload video, run infer_onnx.py on the GPU, download result, fill player."""
+    import numpy as np
+    try:
+        with st.spinner("Running inference on GPU server..."):
+            from tools.remote_gpu import run_remote_infer
+            cls_txt = st.session_state.cls_txt
+            if cls_txt is None:
+                tmp = Path(tempfile.mkdtemp()) / "classes.txt"
+                tmp.write_text("\n".join(st.session_state.names), encoding="utf-8")
+                cls_txt = str(tmp)
+            local_out, log = run_remote_infer(
+                st.session_state.ssh, mp, cls_txt, conf, iou, imgsz,
+                batch, stride, remote=None)
+            st.session_state.remote_log = log
+            frames, fps = _frames_from_mp4(local_out)
+            cap = cv2.VideoCapture(str(local_out))
+            n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or len(frames))
+            mid = min(len(frames) - 1, max(0, n // 2))
+            cap.release()
+            st.session_state.update(
+                frames=frames, fps=fps, frame=0, playing=False,
+                video_bytes=Path(local_out).read_bytes(),
+                mid_raw=frames[mid] if frames else None,
+                stats=f"{len(frames)} frames · GPU result ({log.splitlines()[-1] if log else ''})")
+            st.session_state.scrub = 0
+        with st.expander("🖥️ GPU run log"):
+            st.code(st.session_state.remote_log or "(empty)")
+    except Exception as e:
+        st.error(f"Remote inference failed (falling back to local next time): {e}")
+        st.session_state.remote_ready = False
 
 
 @st.fragment(run_every=0.15)
