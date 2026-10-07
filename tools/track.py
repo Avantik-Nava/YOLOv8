@@ -19,9 +19,9 @@ def main():
     p.add_argument("--imgsz", type=int, default=640)
     args = p.parse_args()
 
-    from yolo.data import letterbox
-    from yolo.engine import YOLO
-    from yolo.engine.tracker import IoUTracker
+    from yolox.data import letterbox
+    from yolox.engine import YOLO
+    from yolox.engine.tracker import IoUTracker
 
     m = YOLO(args.weights, num_classes=args.num_classes)
     m.model.eval()

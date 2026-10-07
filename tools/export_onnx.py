@@ -19,7 +19,7 @@ def main():
     p.add_argument("--imgsz", type=int, default=640)
     args = p.parse_args()
 
-    from yolo.models import YOLOv8
+    from yolox.models import YOLOv8
     model = YOLOv8(version=args.version, num_classes=args.num_classes).eval()
     if args.ckpt and Path(args.ckpt).exists():
         sd = torch.load(args.ckpt, map_location="cpu")

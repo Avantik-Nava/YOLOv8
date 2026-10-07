@@ -1,28 +1,31 @@
-# YOLOv8 in YOLOX Structure
+# YOLOv8 in exact YOLOX structure
 
-Official YOLOv8 (Ultralytics, Jan 2023) re-implemented from scratch in the
-**YOLOX-official project layout** you already use (`YOLOX/`).
+Official YOLOv8 (Ultralytics, Jan 2023) with **all YOLOv8 features**, laid out
+exactly like official YOLOX (`yolox/`, `tools/`, `exps/`, `YOLOX_outputs/`).
 
 - Docs reference: https://docs.ultralytics.com/models/yolov8
-- Ultralytics usage (`YOLO("yolov8n.pt")`, `model.train(data="coco8.yaml", epochs=100, imgsz=640)`)
-  is documented below, but this repo is **dependency-free PyTorch** (no `ultralytics` pip needed),
-  structured exactly like YOLOX so your `YOLOX/` vs `YOLOv8/` workflows match.
+- Train exactly like YOLOX: `python tools/train.py -f exps/default/yolov8_s.py`
 
-## Structure (mirrors YOLOX official + your YOLOv26 layout)
+## Structure (same as YOLOX official)
 
 ```
 YOLOv8/
-├── config.yaml          # task/version/nc + train/aug/val (+amp/patience)
-├── test_model.py        # detect 9 checks | test_full.py # all 5 tasks + modes
-├── yolo_cli.py          # task=detect mode=train model=yolov8s.pt ...
+├── test_model.py / test_full.py
+├── yolo_cli.py / tools/app.py (local validation UI)
 ├── data/coco8.yaml seg.yaml pose.yaml obb.yaml custom.yaml
-├── exps/                # default.py (task-aware YOLOv8Exp) + yolov8_n/s/m/l/x.py
-├── tools/               # train.py val.py demo.py track.py benchmark.py export.py export_onnx.py
-└── yolo/                # like YOLOX yolox/ package
-    ├── models/          # backbone/neck/head + seg/cls/pose/obb heads + tasks.py factory
-    ├── data/            # dataset.py + augment.py (mosaic/mixup/hsv/affine) + task_datasets.py
-    ├── utils/           # boxes.py ema.py metrics.py coco_eval.py (mAP50/50-95)
-    └── engine/          # api.py YOLO() + tracker.py + benchmark.py
+├── exps/default/yolov8_n/s/m/l/x.py   # depth/width like yolox_s.py
+├── exps/example/yolox_voc/yolov8_voc_s.py
+├── tools/train.py  # -f -n -b -d -c --resume --fp16 -o opts (YOLOX flags)
+├── tools/eval.py   # -f -n -c -b --test-conf --nmsthre (YOLOX flags)
+├── tools/demo.py   # image/video/webcam (YOLOX flags)
+└── yolox/          # like YOLOX yolox/ package
+    ├── exp/        # base_exp.py (BaseExp) + yolov8_base.py (Exp) + build.py
+    ├── models/     # backbone/neck/head (C2f, DFL) + seg/cls/pose/obb + tasks.py
+    ├── data/datasets/  # voc.py voc_classes.py coco.py coco_classes.py
+    ├── evaluators/ # COCOEvaluator / VOCEvaluator
+    ├── core/       # Trainer (warmup, AMP, EMA, no_aug closing, early-stop)
+    ├── utils/      # boxes.py ema.py metrics.py coco_eval.py lr_scheduler.py
+    └── engine/     # YOLO() API + tracker.py + benchmark.py
 ```
 
 YOLOX official for comparison (`YOLOX/YOLOX/`): `yolox/ tools/ exps/ datasets/ demo/`
@@ -50,31 +53,30 @@ Variants here: `n: d=0.33 w=0.25 | s: d=0.33 w=0.50 | m: d=0.67 w=0.75 | l: d=1.
 cd YOLOv8
 pip install -r requirements.txt
 
-# 1. sanity check (like YOLOX/test_model.py)
-python test_model.py
+# 1. sanity check
+python test_model.py && python test_full.py
 
-# 2. point data/custom.yaml at your YOLO-format dataset, set nc/names, then:
-python tools/train.py -e exps/yolov8_s.py
-python tools/train.py --config config.yaml
-python tools/train.py -e exps/yolov8_n.py --num-classes 3 --data data/custom.yaml --epochs 100
+# 2. train exactly like YOLOX (YOLO-format dataset via data/custom.yaml):
+python tools/train.py -f exps/default/yolov8_s.py -b 16
+python tools/train.py -n yolov8-n -b 16 --fp16 -o num_classes=3 max_epoch=50
+python tools/train.py -f exps/default/yolov8_s.py -c YOLOX_outputs/yolov8_s/last.pth --resume
 
-# 3. val (COCO mAP) / demo / track / benchmark / export
-python tools/val.py -e exps/yolov8_s.py -c YOLOv8_outputs/yolov8_s/last.pth
-python tools/demo.py --path image.jpg --ckpt YOLOv8_outputs/yolov8_s/last.pth --num-classes 3 --names person stick other
-python tools/track.py --source 0 --weights YOLOv8_outputs/yolov8_s/last.pth
+# 3. eval / demo like YOLOX
+python tools/eval.py -f exps/default/yolov8_s.py -c YOLOX_outputs/yolov8_s/best.pth -b 16
+python tools/demo.py image -f exps/default/yolov8_s.py -c <ckpt> --path image.jpg --conf 0.25 --save_result
+python tools/track.py --source 0 --weights YOLOX_outputs/yolov8_s/last.pth
 python tools/benchmark.py --weights yolov8n.pt --imgsz 640 --runs 50
 python tools/export.py --weights yolov8n.pt --format onnx -o yolov8n.onnx
-python tools/export.py --weights yolov8n.pt --format torchscript -o yolov8n.torchscript
 
 # 4. local validation UI — upload class file + exp file + weights + image/video
 streamlit run tools/app.py
 # open http://localhost:8501, upload the 4 files, press Run inference
 ```
 
-Full API (no `pip install ultralytics` needed — built in `yolo/engine/api.py`):
+Full API (no `pip install ultralytics` needed — built in `yolox/engine/api.py`):
 
 ```python
-from yolo.engine import YOLO
+from yolox.engine import YOLO
 model = YOLO("yolov8n.pt"); model.info()
 model.train(data="data/coco8.yaml", epochs=100, imgsz=640)
 model.predict("image.jpg"); model.val(); model.export(format="onnx")
@@ -108,13 +110,13 @@ Same as YOLOX (`voc_classes.py`, `yolox_voc_s.py`, `voc.py`). You never touch th
 
 | # | File | What you edit |
 |---|------|---------------|
-| 1 | `yolo/data/datasets/voc_classes.py` | class names, e.g. `VOC_CLASSES = ("person", "stick")` |
-| 2 | `exps/yolov8_voc_s.py` | `num_classes`, `version`, `data_dir`, `train_sets`/`val_sets` |
-| 3 | `yolo/data/datasets/voc.py` | only if your folder layout differs from `VOCdevkit/` |
+| 1 | `yolox/data/datasets/voc_classes.py` | class names, e.g. `VOC_CLASSES = ("person", "stick")` |
+| 2 | `exps/example/yolox_voc/yolov8_voc_s.py` | `num_classes`, `depth`/`width`, `data_dir`, `train_sets`/`val_sets` |
+| 3 | `yolox/data/datasets/voc.py` | only if your folder layout differs from `VOCdevkit/` |
 
 ```bash
-python tools/train.py -e exps/yolov8_voc_s.py
-python tools/val.py -e exps/yolov8_voc_s.py -c YOLOv8_outputs/yolov8_voc_s/last.pth
+python tools/train.py -f exps/example/yolox_voc/yolov8_voc_s.py -b 16
+python tools/eval.py -f exps/example/yolox_voc/yolov8_voc_s.py -c YOLOX_outputs/yolov8_voc_s/best.pth
 ```
 
 ## YOLOX vs YOLOv8 (what changed in code)

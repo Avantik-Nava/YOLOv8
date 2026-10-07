@@ -18,7 +18,7 @@ import torch
 
 def test_c2f():
     print("Testing C2f block...")
-    from yolo.models import C2f
+    from yolox.models import C2f
     m = C2f(64, 64, n=1)
     x = torch.randn(1, 64, 80, 80)
     y = m(x)
@@ -29,7 +29,7 @@ def test_c2f():
 
 def test_sppf():
     print("\nTesting SPPF...")
-    from yolo.models import SPPF
+    from yolox.models import SPPF
     m = SPPF(256, 256)
     y = m(torch.randn(1, 256, 20, 20))
     assert y.shape == (1, 256, 20, 20), y.shape
@@ -39,7 +39,7 @@ def test_sppf():
 
 def test_backbone():
     print("\nTesting CSPDarknet-C2f backbone...")
-    from yolo.models import CSPDarknetC2f
+    from yolox.models import CSPDarknetC2f
     for v in ["n", "s"]:
         m = CSPDarknetC2f(v).eval()
         with torch.no_grad():
@@ -51,8 +51,8 @@ def test_backbone():
 
 def test_neck():
     print("\nTesting YOLOv8 PAN-FPN neck...")
-    from yolo.models import CSPDarknetC2f
-    from yolo.models.neck import YOLOv8Neck
+    from yolox.models import CSPDarknetC2f
+    from yolox.models.neck import YOLOv8Neck
     bb = CSPDarknetC2f("s").eval()
     neck = YOLOv8Neck(bb.out_channels, "s").eval()
     with torch.no_grad():
@@ -66,8 +66,8 @@ def test_neck():
 
 def test_head():
     print("\nTesting YOLOv8 anchor-free DFL head (no obj branch)...")
-    from yolo.models import CSPDarknetC2f, YOLOv8Head
-    from yolo.models.neck import YOLOv8Neck
+    from yolox.models import CSPDarknetC2f, YOLOv8Head
+    from yolox.models.neck import YOLOv8Neck
     bb = CSPDarknetC2f("s").eval()
     neck = YOLOv8Neck(bb.out_channels, "s").eval()
     head = YOLOv8Head(80, neck.out_channels, reg_max=16).eval()
@@ -85,7 +85,7 @@ def test_head():
 
 def test_tal_dfl():
     print("\nTesting TaskAlignedAssigner + DFLoss...")
-    from yolo.models import TaskAlignedAssigner, DFLoss
+    from yolox.models import TaskAlignedAssigner, DFLoss
     tal = TaskAlignedAssigner(topk=10)
     B, N, C, M = 1, 8400, 80, 3
     ps = torch.rand(B, N, C)
@@ -106,7 +106,7 @@ def test_tal_dfl():
 
 def test_model_eval():
     print("\nTesting YOLOv8 full model (eval)...")
-    from yolo.models import YOLOv8
+    from yolox.models import YOLOv8
     for v in ["n", "s"]:
         m = YOLOv8(version=v, num_classes=80).eval()
         n_params = sum(p.numel() for p in m.parameters())
@@ -118,7 +118,7 @@ def test_model_eval():
 
 def test_model_train():
     print("\nTesting YOLOv8 full model (train + loss)...")
-    from yolo.models import YOLOv8
+    from yolox.models import YOLOv8
     m = YOLOv8(version="s", num_classes=3)
     m.train()
     x = torch.randn(2, 3, 640, 640)
@@ -139,7 +139,7 @@ def test_model_train():
 
 def test_nms_predict():
     print("\nTesting predict() + NMS...")
-    from yolo.models import YOLOv8
+    from yolox.models import YOLOv8
     m = YOLOv8(version="n", num_classes=3).eval()
     with torch.no_grad():
         dets = m.predict(torch.randn(1, 3, 640, 640), conf_threshold=0.25)

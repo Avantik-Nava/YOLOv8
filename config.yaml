@@ -51,7 +51,7 @@ shear: 0.0
 # Validation / checkpoint
 eval_interval: 1
 save_interval: 10
-save_dir: 'YOLOv8_outputs'
+save_dir: 'YOLOX_outputs'
 test_conf: 0.01
 nmsthre: 0.7
 print_interval: 10

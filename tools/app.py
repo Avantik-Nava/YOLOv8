@@ -24,7 +24,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from yolo.data import letterbox  # noqa: E402
+from yolox.data import letterbox  # noqa: E402
 
 
 # ---------------- parsing ----------------

@@ -15,7 +15,7 @@ def ok(msg):
 
 
 def test_tasks():
-    from yolo.models.tasks import create_model
+    from yolox.models.tasks import create_model
     x = torch.randn(1, 3, 256, 256)
     m = create_model("detect", "n", 3).eval()
     with torch.no_grad():
@@ -43,7 +43,7 @@ def test_tasks():
 
 
 def test_train_losses():
-    from yolo.models.tasks import create_model
+    from yolox.models.tasks import create_model
     md = create_model("detect", "n", 3)
     md.train()
     lb = torch.full((1, 2, 5), -1.0)
@@ -65,7 +65,7 @@ def test_train_losses():
 
 def test_augment_tracker_eval():
     import numpy as np
-    from yolo.data import mosaic4, mixup, augment_hsv
+    from yolox.data import mosaic4, mixup, augment_hsv
     s = [(np.full((320, 320, 3), 128, np.uint8), np.array([[0, 0.5, 0.5, 0.2, 0.2]], np.float32))] * 4
     img, lb = mosaic4(s, 640)
     assert img.shape == (640, 640, 3) and len(lb) >= 1
@@ -73,19 +73,19 @@ def test_augment_tracker_eval():
     img2, lb2 = mixup(s[0][0], s[0][1], s[1][0], s[1][1])
     ok("mixup + hsv")
     augment_hsv(img)
-    from yolo.engine.tracker import IoUTracker
+    from yolox.engine.tracker import IoUTracker
     tr = IoUTracker()
     t = tr.update(np.array([[10, 10, 50, 50, 0.9, 0]]))
     t = tr.update(np.array([[12, 12, 52, 52, 0.9, 0]]))
     assert t[0, 6] == 1
     ok(f"tracker id-stable {t[0,6]:.0f}")
-    from yolo.utils import coco_map
+    from yolox.utils import coco_map
     m = coco_map([np.array([[10, 10, 50, 50, 0.9, 0]])], [np.array([[0, 10, 10, 50, 50]])])
     ok(f"coco mAP50={m['map50']:.2f} mAP50-95={m['map5095']:.2f}")
 
 
 def test_api_benchmark():
-    from yolo.engine import YOLO
+    from yolox.engine import YOLO
     m = YOLO("yolov8n.pt", num_classes=3)
     m.info()
     ok("YOLO('yolov8n.pt') detect/n parsed")

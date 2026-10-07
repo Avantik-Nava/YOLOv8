@@ -28,7 +28,7 @@ def main():
     imgsz = int(kv.get("imgsz", 640))
     nc = int(kv.get("nc", kv.get("num_classes", 80)))
 
-    from yolo.engine import YOLO
+    from yolox.engine import YOLO
     m = YOLO(model, task=task, num_classes=nc)
     if mode == "train":
         m.train(data=data, epochs=epochs, imgsz=imgsz)

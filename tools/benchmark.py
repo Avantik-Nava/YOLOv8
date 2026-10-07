@@ -17,7 +17,7 @@ def main():
     p.add_argument("--runs", type=int, default=50)
     args = p.parse_args()
 
-    from yolo.engine import YOLO
+    from yolox.engine import YOLO
     kw = {}
     if args.task:
         kw["task"] = args.task

@@ -5,6 +5,7 @@ __pycache__/
 .venv/ venv/
 
 # Training outputs / weights
+YOLOX_outputs/
 YOLOv8_outputs/
 *.pth
 *.pt

@@ -1,3 +1,3 @@
-from .default import YOLOv8Exp
+from yolox.exp import Exp
 
-__all__ = ["YOLOv8Exp"]
+__all__ = ["Exp"]

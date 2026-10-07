@@ -18,7 +18,7 @@ def main():
     p.add_argument("--imgsz", type=int, default=640)
     args = p.parse_args()
 
-    from yolo.engine import YOLO
+    from yolox.engine import YOLO
     kw = {}
     if args.task:
         kw["task"] = args.task
