@@ -1,0 +1,10 @@
+# OBB dataset (DOTA-style): labels rows = cls cx cy w h theta (radians)
+path: ../datasets/dota8
+train_images: images/train
+train_labels: labels/train
+val_images: images/val
+val_labels: labels/val
+nc: 15
+names: [plane, ship, storage tank, baseball diamond, tennis court, basketball court,
+  ground track field, harbor, bridge, large vehicle, small vehicle, helicopter,
+  roundabout, soccer ball field, swimming pool]

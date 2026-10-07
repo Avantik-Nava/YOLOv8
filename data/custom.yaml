@@ -1,0 +1,15 @@
+# Ultralytics-style dataset yaml (used by exps/default.py + tools/train.py)
+# path can be absolute or relative to YOLOv8/
+path: ../YOLOv8_Test          # <-- change to your dataset root
+train_images: Data/images/train
+train_labels: Data/labels/train
+val_images: Data/images/val
+val_labels: Data/labels/val
+
+# If you keep VOC-style (jpegimages/Annotations) convert first, or point
+# these at your YOLO-format folders. Example for COCO8-style:
+# train_images: images/train
+# train_labels: labels/train
+
+nc: 1
+names: ['person_with_stick']

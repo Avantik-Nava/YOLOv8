@@ -1,0 +1,9 @@
+# Segment dataset: same layout as detect + optional masks/ dir (PNG per image)
+path: ../datasets/seg8
+train_images: images/train
+train_labels: labels/train
+val_images: images/val
+val_labels: labels/val
+nc: 80
+names: [object]
+nm: 32

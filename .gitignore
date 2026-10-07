@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/ venv/
+
+# Training outputs / weights
+YOLOv8_outputs/
+*.pth
+*.pt
+*.onnx
+*.torchscript
+*.engine
+
+# Data (keep yamls, ignore datasets)
+/datasets/
+*.jpg
+*.png
+*.mp4
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

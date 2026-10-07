@@ -1,0 +1,57 @@
+# YOLOv8 Training Configuration (YOLOX config.yaml style, Ultralytics YOLOv8 values)
+# Ref: https://docs.ultralytics.com/models/yolov8
+
+# Model settings (one of n, s, m, l, x — see Performance table in README)
+task: 'detect'           # detect | segment | classify | pose | obb
+model_version: 's'
+num_classes: 80      # COCO=80; set to len(names) for custom data
+nkpt: 17             # pose keypoints (pose task)
+nm: 32               # seg mask coefficients (segment task)
+reg_max: 16          # YOLOv8 DFL bins (do not change)
+strides: [8, 16, 32]
+input_size: [640, 640]
+test_size: [640, 640]
+
+# Data
+data_yaml: 'data/custom.yaml'
+
+# Training settings (Ultralytics defaults; docs example trains 100 epochs, imgsz 640)
+epochs: 100
+batch_size: 16
+lr: 0.01
+min_lr_ratio: 0.0001
+momentum: 0.937
+weight_decay: 5e-4
+warmup_epochs: 3
+close_mosaic: 10     # disable mosaic/mixup in last N epochs (YOLOv8 recipe)
+ema: true
+amp: true            # mixed precision (cuda only)
+patience: 50         # early stopping epochs
+ddp: false           # torchrun multi-gpu (single-node stub)
+
+# Loss gains (Ultralytics defaults)
+box_gain: 7.5
+cls_gain: 0.5
+dfl_gain: 1.5
+tal_topk: 10         # TaskAlignedAssigner top-k
+tal_alpha: 0.5
+tal_beta: 6.0
+
+# Augmentation (YOLOv8)
+mosaic_prob: 1.0
+mixup_prob: 0.0
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+flip_prob: 0.5
+degrees: 0.0
+translate: 0.1
+shear: 0.0
+
+# Validation / checkpoint
+eval_interval: 1
+save_interval: 10
+save_dir: 'YOLOv8_outputs'
+test_conf: 0.01
+nmsthre: 0.7
+print_interval: 10

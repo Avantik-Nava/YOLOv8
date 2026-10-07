@@ -1,0 +1,9 @@
+# Pose dataset: labels rows = cls cx cy w h k1x k1y k1v ... (normalized)
+path: ../datasets/pose8
+train_images: images/train
+train_labels: labels/train
+val_images: images/val
+val_labels: labels/val
+nc: 1
+nkpt: 17
+names: [person]
