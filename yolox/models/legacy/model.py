@@ -13,6 +13,7 @@ from .head import YOLOXHead
 
 
 class YOLOX(nn.Module):
+    yolox_legacy = True  # marker: BGR top-left-pad preprocessing (YOLOX ValTransform)
     def __init__(self, backbone=None, head=None):
         super().__init__()
         if backbone is None:

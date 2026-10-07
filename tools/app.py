@@ -171,13 +171,25 @@ def _draw(img_bgr, dets, names):
 
 @torch.no_grad()
 def _infer_batch(model, frames_bgr, names, conf=0.25, iou=0.7, imgsz=640):
-    """Batched inference (much faster than per-frame). Returns [(out, dets)]."""
+    """Batched inference (much faster than per-frame). Returns [(out, dets)].
+
+    Legacy YOLOX models get YOLOX-faithful input: BGR, top-left pad (no centering).
+    """
+    import numpy as np
+    legacy = bool(getattr(model, "yolox_legacy", False))
     pre, meta = [], []
     for f in frames_bgr:
         h0, w0 = f.shape[:2]
-        rgb = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
-        lb, s, (dw, dh) = letterbox(rgb, imgsz)
-        pre.append(torch.from_numpy(lb.transpose(2, 0, 1)).float() / 255.0)
+        s = min(imgsz / h0, imgsz / w0)
+        if legacy:
+            img = cv2.resize(f, (int(w0 * s), int(h0 * s)), interpolation=cv2.INTER_LINEAR)
+            canvas = np.full((imgsz, imgsz, 3), 114, np.uint8)
+            canvas[:img.shape[0], :img.shape[1]] = img  # BGR, top-left (YOLOX preproc)
+            dw = dh = 0
+        else:
+            rgb = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
+            canvas, s, (dw, dh) = letterbox(rgb, imgsz)
+        pre.append(torch.from_numpy(canvas.transpose(2, 0, 1)).float() / 255.0)
         meta.append((w0, h0, s, dw, dh))
     t = torch.stack(pre).contiguous(memory_format=torch.channels_last)
     dets_list = model.predict(t, conf_threshold=conf, iou_threshold=iou)
@@ -290,7 +302,7 @@ def main():
         rtsp_url = r1.text_input("RTSP URL", placeholder="rtsp://user:pass@ip:554/stream")
         rtsp_sec = r2.number_input("seconds", 5, 120, 15)
     o1, o2, o3 = st.columns(3)
-    conf = o1.slider("conf threshold", 0.05, 0.90, 0.25, 0.05)
+    conf = o1.slider("conf threshold", 0.01, 0.90, 0.25, 0.01)
     iou = o2.slider("nms iou", 0.20, 0.95, 0.70, 0.05)
     imgsz = o3.selectbox("imgsz (lower = faster)", [320, 480, 640], index=0)
     with st.expander("⚡ Speed options", expanded=False):
@@ -317,14 +329,18 @@ def main():
                 mp.write_bytes(media_file.getvalue())
         if mp is not None:
             model, names = st.session_state.model, st.session_state.names
-            frames, fps, total_det, done, calls, speed = _process_video(
+            frames, fps, total_det, done, calls, speed, mid_raw = _process_video(
                 model, names, mp, conf, iou, imgsz, batch=batch, stride=stride)
             if done:
                 vw_path = tmp / "result.mp4"
                 _write_mp4(frames, fps, vw_path)
+                _, mid_buf = cv2.imencode(".jpg", mid_raw if mid_raw is not None else
+                                          cv2.imdecode(np.frombuffer(frames[0], np.uint8),
+                                                       cv2.IMREAD_COLOR))
                 st.session_state.update(
                     frames=frames, fps=fps, frame=0, playing=False,
                     video_bytes=vw_path.read_bytes(),
+                    mid_raw=mid_buf.tobytes(),
                     stats=(f"{done} frames · {total_det} detections · "
                            f"{speed:.1f} fps processing ({calls} forwards)"))
                 st.session_state.scrub = 0
@@ -340,6 +356,22 @@ def main():
             st.video(st.session_state.video_bytes)
         st.download_button("⬇️ Download result video", st.session_state.video_bytes,
                            "result.mp4", "video/mp4")
+        with st.expander("🔍 Low / no detections? Diagnose on middle frame"):
+            if st.button("Run diagnosis"):
+                import numpy as np
+                raw = cv2.imdecode(np.frombuffer(st.session_state.mid_raw, np.uint8),
+                                   cv2.IMREAD_COLOR)
+                with st.spinner("Probing raw model output..."):
+                    d = _diagnose(st.session_state.model, st.session_state.names, raw, imgsz)
+                st.write(f"Input pipeline: **{d['arch']}** · max box score: **{d['max_score']}**")
+                st.write("Boxes above threshold:", d["counts"])
+                st.table(d["top5"])
+                if d["max_score"] < 0.05:
+                    st.warning("Max score is near zero — the weights may not match this video "
+                               "(wrong classes/version), or the checkpoint didn't load fully. "
+                               "Check the coverage % shown after Load Model.")
+                elif d["counts"].get(0.25, 0) == 0 and d["counts"].get(0.05, 0) > 0:
+                    st.info("Boxes exist at low conf — lower the conf slider (try 0.05–0.10) and reload the video.")
 
 
 def _speedup(model):
@@ -392,6 +424,41 @@ def _record_rtsp(st, url, seconds, tmp):
     return out
 
 
+@torch.no_grad()
+def _diagnose(model, names, frame_bgr, imgsz=640):
+    """Raw model output stats on one frame: max score, box counts per threshold, top-5."""
+    import numpy as np
+    model.eval()
+    legacy = bool(getattr(model, "yolox_legacy", False))
+    h0, w0 = frame_bgr.shape[:2]
+    s = min(imgsz / h0, imgsz / w0)
+    if legacy:
+        img = cv2.resize(frame_bgr, (int(w0 * s), int(h0 * s)), interpolation=cv2.INTER_LINEAR)
+        canvas = np.full((imgsz, imgsz, 3), 114, np.uint8)
+        canvas[:img.shape[0], :img.shape[1]] = img
+    else:
+        canvas, s, (_dw, _dh) = letterbox(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB), imgsz)
+    t = torch.from_numpy(canvas.transpose(2, 0, 1)).float().unsqueeze(0) / 255.0
+    t = t.contiguous(memory_format=torch.channels_last)
+    raw = model(t)
+    if legacy:
+        r = raw[0]
+        scores = (r[:, 4:5] * r[:, 5:])  # obj * cls  [N, nc]
+    else:
+        scores = raw[0][:, 4:]          # cls scores [N, nc]
+    best, _ = scores.max(-1)
+    counts = {th: int((best > th).sum()) for th in (0.01, 0.05, 0.10, 0.25, 0.50)}
+    k = min(5, best.shape[0])
+    vals, idx = torch.topk(best, k)
+    top = []
+    for v, i in zip(vals.tolist(), idx.tolist()):
+        c = int(scores[i].argmax())
+        top.append({"score": round(v, 4),
+                    "class": names[c] if c < len(names) else c})
+    return {"max_score": round(float(best.max()), 4), "counts": counts, "top5": top,
+            "arch": "yolox-legacy (BGR)" if legacy else "yolov8 (RGB)"}
+
+
 def _process_video(model, names, mp, conf, iou, imgsz, batch=4, stride=1,
                    max_frames=1200):
     """Fast batched inference. stride>1 runs the model every Nth frame and
@@ -401,6 +468,7 @@ def _process_video(model, names, mp, conf, iou, imgsz, batch=4, stride=1,
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
     n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frames, total_det, done, infer_calls = [], 0, 0, 0
+    mid_raw, mid_idx = None, (n_frames // 2 if n_frames > 0 else 0)
     prog = st.progress(0, text="Processing video...")
     t0 = time.time()
     acc, last = [], None  # acc: [(frame, sampled)]
@@ -434,6 +502,8 @@ def _process_video(model, names, mp, conf, iou, imgsz, batch=4, stride=1,
                 frames.append(_jpg(out))
             break
         acc.append((frame, idx % stride == 0))
+        if idx == mid_idx:
+            mid_raw = frame.copy()
         if sum(1 for _, s in acc if s) >= batch:
             for (out, _d) in flush():
                 frames.append(_jpg(out))
@@ -447,7 +517,7 @@ def _process_video(model, names, mp, conf, iou, imgsz, batch=4, stride=1,
         st.warning(f"Trimmed to first {max_frames} frames.")
     prog.empty()
     speed = len(frames) / max(time.time() - t0, 1e-3)
-    return frames, fps, total_det, len(frames), infer_calls, speed
+    return frames, fps, total_det, len(frames), infer_calls, speed, mid_raw
 
 
 def np_empty_dets():
