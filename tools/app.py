@@ -320,7 +320,10 @@ def main():
         batch = s1.selectbox("batch size (frames per forward)", [1, 2, 4, 8], index=2)
         stride = s2.selectbox("process every Nth frame (rest reuse boxes)", [1, 2, 3, 5], index=0)
         st.caption("Batch 4 + stride 2 ≈ 4–6× faster than before on CPU.")
-    load_media = st.button("🎬 Load Video", type="primary", use_container_width=True)
+    load_label = ("⚡ Run on GPU server" if _ssh_alive() and
+                    (st.session_state.remote_ready or st.session_state.model is not None)
+                    else "🎬 Load Video")
+    load_media = st.button(load_label, type="primary", use_container_width=True)
 
     if load_media:
         tmp = Path(tempfile.mkdtemp())

@@ -9,7 +9,20 @@ Needs: paramiko (local only).
 import io
 import time
 
-REMOTE_DIR = "~/yolo_remote"
+REMOTE_SUBDIR = "yolo_remote"
+
+
+def _rdir(client):
+    """Absolute remote work dir. (SFTP does NOT expand ~, so resolve $HOME.)"""
+    code, out, _ = run(client, "echo $HOME", timeout=15)
+    home = (out or "").strip()
+    if code != 0 or not home:
+        raise RuntimeError("could not resolve $HOME on the server")
+    rdir = f"{home}/{REMOTE_SUBDIR}"
+    code, _, err = run(client, f"mkdir -p {rdir}", timeout=30)
+    if code != 0:
+        raise RuntimeError(f"could not create {rdir}: {err.strip()}")
+    return rdir
 
 
 def connect(host, user, password=None, key_bytes=None, key_pass=None,
@@ -87,14 +100,16 @@ def ensure_env(client, timeout=600):
 
 def prepare_job(client, local_onnx, local_script="tools/infer_onnx.py"):
     """Upload model + standalone script. Returns remote paths dict."""
-    run(client, f"mkdir -p {REMOTE_DIR}")
-    run(client, f"cp {REMOTE_DIR}/infer_onnx.py {REMOTE_DIR}/infer_onnx.py.bak 2>/dev/null; true")
-    put(client, local_onnx, f"{REMOTE_DIR}/model.onnx")
+    rdir = _rdir(client)
+    run(client, f"cp {rdir}/infer_onnx.py {rdir}/infer_onnx.py.bak 2>/dev/null; true")
+    put(client, local_onnx, f"{rdir}/model.onnx")
     from pathlib import Path
     script = Path(__file__).resolve().parents[1] / local_script
-    put(client, script, f"{REMOTE_DIR}/infer_onnx.py")
-    return {"dir": REMOTE_DIR, "model": f"{REMOTE_DIR}/model.onnx",
-            "script": f"{REMOTE_DIR}/infer_onnx.py"}
+    if not script.exists():
+        raise RuntimeError(f"local script missing: {script}")
+    put(client, script, f"{rdir}/infer_onnx.py")
+    return {"dir": rdir, "model": f"{rdir}/model.onnx",
+            "script": f"{rdir}/infer_onnx.py"}
 
 
 def run_remote_infer(client, video_local, classes_local, conf, nms, imgsz,
@@ -102,12 +117,15 @@ def run_remote_infer(client, video_local, classes_local, conf, nms, imgsz,
     """Upload inputs, run onnxruntime on the server (CUDA if present), return local result path + log."""
     import tempfile
     from pathlib import Path
-    put(client, video_local, f"{REMOTE_DIR}/{job}_in.mp4")
+    if not Path(video_local).exists():
+        raise RuntimeError(f"local video missing: {video_local}")
+    rdir = _rdir(client)
+    put(client, video_local, f"{rdir}/{job}_in.mp4")
     if classes_local:
-        put(client, classes_local, f"{REMOTE_DIR}/{job}_cls.txt")
-    cls_arg = f"--classes {REMOTE_DIR}/{job}_cls.txt " if classes_local else ""
-    cmd = (f"cd {REMOTE_DIR} && python3 infer_onnx.py --model {REMOTE_DIR}/model.onnx "
-           f"--source {REMOTE_DIR}/{job}_in.mp4 --out {REMOTE_DIR}/{job}_out.mp4 {cls_arg}"
+        put(client, classes_local, f"{rdir}/{job}_cls.txt")
+    cls_arg = f"--classes {rdir}/{job}_cls.txt " if classes_local else ""
+    cmd = (f"cd {rdir} && python3 infer_onnx.py --model {rdir}/model.onnx "
+           f"--source {rdir}/{job}_in.mp4 --out {rdir}/{job}_out.mp4 {cls_arg}"
            f"--conf {conf} --nms {nms} --imgsz {imgsz} --batch {batch} --stride {stride}")
     t0 = time.time()
     code, out, err = run(client, cmd, timeout=7200)
@@ -115,6 +133,6 @@ def run_remote_infer(client, video_local, classes_local, conf, nms, imgsz,
     if code != 0:
         raise RuntimeError(f"remote inference failed (exit {code}):\n{log[-3000:]}")
     local_out = Path(tempfile.mkdtemp()) / "result_remote.mp4"
-    get(client, f"{REMOTE_DIR}/{job}_out.mp4", local_out)
+    get(client, f"{rdir}/{job}_out.mp4", local_out)
     log += f"\n[remote wall time {time.time()-t0:.1f}s]"
     return local_out, log
