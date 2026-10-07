@@ -338,7 +338,16 @@ def main():
                 mp = tmp / media_file.name
                 mp.write_bytes(media_file.getvalue())
         if mp is not None:
-            if _ssh_alive() and st.session_state.remote_ready:
+            use_gpu = False
+            if _ssh_alive():
+                if not st.session_state.remote_ready and st.session_state.model is not None:
+                    with st.spinner("GPU connected but model not shipped — shipping now..."):
+                        _ship_model_to_gpu()
+                use_gpu = bool(st.session_state.remote_ready)
+                if not use_gpu:
+                    st.warning("⚠️ GPU ship failed — running on LOCAL CPU instead. "
+                               "See the error above; fix it and reload the video.")
+            if use_gpu:
                 _load_video_remote(mp, conf, iou, imgsz, batch, stride)
             else:
                 model, names = st.session_state.model, st.session_state.names
@@ -354,8 +363,8 @@ def main():
                         frames=frames, fps=fps, frame=0, playing=False,
                         video_bytes=vw_path.read_bytes(),
                         mid_raw=mid_buf.tobytes(),
-                        stats=(f"{done} frames · {total_det} detections · "
-                               f"{speed:.1f} fps processing ({calls} forwards, local)"))
+                        stats=(f"💻 LOCAL CPU · {done} frames · {total_det} detections · "
+                               f"{speed:.1f} fps processing ({calls} forwards)"))
                     st.session_state.scrub = 0
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -675,7 +684,7 @@ def _load_video_remote(mp, conf, iou, imgsz, batch, stride):
                 frames=frames, fps=fps, frame=0, playing=False,
                 video_bytes=Path(local_out).read_bytes(),
                 mid_raw=frames[mid] if frames else None,
-                stats=f"{len(frames)} frames · GPU result ({log.splitlines()[-1] if log else ''})")
+                stats=f"🖥️ GPU SERVER · {len(frames)} frames · GPU result ({log.splitlines()[-1] if log else ''})")
             st.session_state.scrub = 0
         with st.expander("🖥️ GPU run log"):
             st.code(st.session_state.remote_log or "(empty)")
