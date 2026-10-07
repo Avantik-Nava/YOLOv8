@@ -81,17 +81,21 @@ def gpu_info(client):
 
 
 def ensure_env(client, timeout=600):
-    """Make sure python3 + onnxruntime(+gpu)/opencv/numpy exist. Returns report lines."""
+    """Make sure the SAME python3 that runs inference has onnxruntime/cv2/numpy."""
     log = []
-    code, out, _ = run(client, "python3 -c 'import onnxruntime as o; print(o.__version__)' 2>&1", timeout=60)
-    if code == 0 and out.strip():
-        log.append(f"onnxruntime {out.strip()} present")
-    else:
-        log.append("installing onnxruntime-gpu + opencv + numpy ...")
-        code, out, err = run(client, "pip install -q onnxruntime-gpu opencv-python numpy 2>&1 "
-                                     "|| pip3 install -q onnxruntime-gpu opencv-python numpy 2>&1",
-                             timeout=timeout)
-        log.append((out + err).strip()[-2000:] or "pip install finished")
+    pkgs = {"onnxruntime": "onnxruntime-gpu", "cv2": "opencv-python", "numpy": "numpy"}
+    for mod, pip_name in pkgs.items():
+        code, out, _ = run(client, f"python3 -c 'import {mod}; print(\"ok\")' 2>&1", timeout=60)
+        if code == 0 and out.strip() == "ok":
+            log.append(f"{pip_name}: present")
+            continue
+        log.append(f"{pip_name}: missing -> installing with python3 -m pip ...")
+        code, out, err = run(client, f"python3 -m pip install -q {pip_name} 2>&1", timeout=timeout)
+        code2, out2, _ = run(client, f"python3 -c 'import {mod}; print(\"ok\")' 2>&1", timeout=60)
+        if code2 == 0 and out2.strip() == "ok":
+            log.append(f"{pip_name}: installed OK")
+        else:
+            log.append(f"{pip_name}: INSTALL FAILED:\n{(out + err).strip()[-1500:]}")
     code, out, _ = run(client, "python3 -c 'import onnxruntime as o; print(o.get_available_providers())' 2>&1",
                        timeout=60)
     log.append("providers: " + (out.strip() or "?"))

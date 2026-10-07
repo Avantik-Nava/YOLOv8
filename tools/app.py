@@ -674,8 +674,17 @@ def _load_video_remote(mp, conf, iou, imgsz, batch, stride):
     """Upload video, run infer_onnx.py on the GPU, download result, fill player."""
     import numpy as np
     try:
+        with st.spinner("Checking GPU packages..."):
+            from tools.remote_gpu import run_remote_infer, ensure_env
+            env_log = ensure_env(st.session_state.ssh)
+            st.session_state.remote_log = "\n".join(env_log)
+            if any("INSTALL FAILED" in l for l in env_log):
+                st.error("Server packages missing and auto-install failed. On the server run once:\n"
+                         "python3 -m pip install onnxruntime-gpu opencv-python numpy")
+                with st.expander("Server environment log"):
+                    st.code(st.session_state.remote_log)
+                return
         with st.spinner("Running inference on GPU server..."):
-            from tools.remote_gpu import run_remote_infer
             cls_txt = st.session_state.cls_txt
             if cls_txt is None:
                 tmp = Path(tempfile.mkdtemp()) / "classes.txt"
