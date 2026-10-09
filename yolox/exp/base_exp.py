@@ -63,13 +63,24 @@ class BaseExp(metaclass=ABCMeta):
                 for k, v in vars(self).items()
                 if not k.startswith("_")
             ]
-            return tabulate(exp_table, headers=table_header, tablefmt="fancy_grid")
+            return tabulate(exp_table, headers=table_header, tablefmt="grid")
         except ImportError:
             return pprint.pformat(vars(self))
 
     def merge(self, cfg_list):
-        assert len(cfg_list) % 2 == 0, f"length must be even, check value here: {cfg_list}"
-        for k, v in zip(cfg_list[0::2], cfg_list[1::2]):
+        if not cfg_list:
+            return
+        # Accept both YOLOX style [k, v, k, v] and Ultralytics style [k=v, ...]
+        flat = []
+        for item in cfg_list:
+            if isinstance(item, str) and "=" in item and item.startswith("-") is False:
+                # split k=v -> k, v (only on first =)
+                k, v = item.split("=", 1)
+                flat += [k.strip(), v.strip()]
+            else:
+                flat.append(item)
+        assert len(flat) % 2 == 0, f"length must be even, check value here: {cfg_list}"
+        for k, v in zip(flat[0::2], flat[1::2]):
             # only update value with same key
             if hasattr(self, k):
                 src_value = getattr(self, k)

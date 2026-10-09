@@ -53,6 +53,11 @@ def main():
         exp.test_size = (args.test_size, args.test_size)
     print(exp)
 
+    if getattr(exp, "backend", "native") == "ultra":
+        from yolox.engine.ultra import val_ultra
+        val_ultra(exp, args)
+        return
+
     if args.devices is not None and torch.cuda.is_available():
         torch.cuda.set_device(args.devices)
         device = torch.device(f"cuda:{args.devices}")

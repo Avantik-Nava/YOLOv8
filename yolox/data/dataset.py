@@ -30,7 +30,8 @@ def letterbox(img, new_size=640, color=(114, 114, 114)):
 class YOLODataset(Dataset):
     def __init__(self, images_dir, labels_dir, img_size=640, augment=False,
                  hsv_h=0.015, hsv_s=0.7, hsv_v=0.4, flip_prob=0.5,
-                 mosaic_prob=0.0, mixup_prob=0.0):
+                 mosaic_prob=0.0, mixup_prob=0.0,
+                 degrees=0.0, translate=0.1, shear=0.0):
         self.images_dir = Path(images_dir)
         self.labels_dir = Path(labels_dir)
         self.img_size = img_size
@@ -39,12 +40,19 @@ class YOLODataset(Dataset):
         self.flip_prob = flip_prob
         self.mosaic_prob = mosaic_prob
         self.mixup_prob = mixup_prob
+        self.degrees = degrees
+        self.translate = translate
+        self.shear = shear
         exts = ("*.jpg", "*.jpeg", "*.png", "*.bmp")
+        seen = set()
         files = []
         for e in exts:
-            files += sorted(self.images_dir.glob(e))
-            files += sorted(self.images_dir.glob(e.upper()))
-        self.files = files
+            for p in list(self.images_dir.glob(e)) + list(self.images_dir.glob(e.upper())):
+                key = str(p.resolve()).lower()
+                if key not in seen:
+                    seen.add(key)
+                    files.append(p)
+        self.files = sorted(files)
         print(f"Found {len(self.files)} images in {images_dir}")
 
     def __len__(self):
@@ -71,7 +79,7 @@ class YOLODataset(Dataset):
         return img, self._load_label(img_path.stem)
 
     def __getitem__(self, idx):
-        from .augment import augment_hsv, mosaic4, mixup
+        from .augment import augment_hsv, mosaic4, mixup, random_affine
 
         if self.augment and len(self.files) >= 4 and np.random.rand() < self.mosaic_prob:
             samples = [self._load_raw(idx)] + \
@@ -86,6 +94,8 @@ class YOLODataset(Dataset):
             img, _, _ = letterbox(img, self.img_size)
 
         if self.augment:
+            img, labels = random_affine(img, labels, degrees=self.degrees,
+                                        translate=self.translate, shear=self.shear)
             if np.random.rand() < self.flip_prob:  # hflip
                 img = np.fliplr(img).copy()
                 if len(labels):

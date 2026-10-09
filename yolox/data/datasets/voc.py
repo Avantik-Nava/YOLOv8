@@ -49,7 +49,8 @@ class VOCDetection(Dataset):
     def __init__(self, data_dir, image_sets=(("2007", "trainval"),), img_size=640,
                  augment=False, target_transform=None, flip_prob=0.5,
                  hsv_h=0.015, hsv_s=0.7, hsv_v=0.4,
-                 mosaic_prob=0.0, mixup_prob=0.0):
+                 mosaic_prob=0.0, mixup_prob=0.0,
+                 degrees=0.0, translate=0.1, shear=0.0):
         self.root = Path(data_dir)
         self.img_size = img_size
         self.augment = augment
@@ -57,6 +58,9 @@ class VOCDetection(Dataset):
         self.hsv = (hsv_h, hsv_s, hsv_v)
         self.mosaic_prob = mosaic_prob
         self.mixup_prob = mixup_prob
+        self.degrees = degrees
+        self.translate = translate
+        self.shear = shear
         self.target_transform = target_transform or AnnotationTransform()
         self._annopath = str(self.root / "VOC%s" / "Annotations" / "%s.xml")
         self._imgpath = str(self.root / "VOC%s" / "JPEGImages" / "%s.jpg")
@@ -91,7 +95,7 @@ class VOCDetection(Dataset):
         return img, labels
 
     def __getitem__(self, index):
-        from ..augment import augment_hsv, mosaic4, mixup
+        from ..augment import augment_hsv, mosaic4, mixup, random_affine
 
         if self.augment and len(self.ids) >= 4 and np.random.rand() < self.mosaic_prob:
             samples = [self._load(index)] + \
@@ -105,6 +109,8 @@ class VOCDetection(Dataset):
             img, labels = self._load(index)
             img, _, _ = letterbox(img, self.img_size)
         if self.augment:
+            img, labels = random_affine(img, labels, degrees=self.degrees,
+                                        translate=self.translate, shear=self.shear)
             if np.random.rand() < self.flip_prob:
                 img = np.fliplr(img).copy()
                 if len(labels):

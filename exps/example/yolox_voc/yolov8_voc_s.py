@@ -11,11 +11,11 @@ class Exp(MyExp):
     def __init__(self):
         super(Exp, self).__init__()
         # ===== EDIT HERE =====
-        self.num_classes = 20          # len of VOC_CLASSES in yolox/data/datasets/voc_classes.py
+        self.num_classes = 3           # len of VOC_CLASSES in yolox/data/datasets/voc_classes.py
         self.depth = 0.33
         self.width = 0.50
-        self.data_dir = "../VOCdevkit"  # path to VOCdevkit folder
-        self.train_sets = (("2007", "trainval"), ("2012", "trainval"))
+        self.data_dir = "datasets/VOCdevkit"  # YOLOX-style: VOCdevkit/VOC2007/{JPEGImages,Annotations,ImageSets}
+        self.train_sets = (("2007", "trainval"),)
         self.val_sets = (("2007", "test"),)
         # =====================
         self.warmup_epochs = 1
@@ -34,6 +34,9 @@ class Exp(MyExp):
             flip_prob=self.flip_prob,
             mosaic_prob=self.mosaic_prob,
             mixup_prob=self.mixup_prob,
+            degrees=self.degrees,
+            translate=self.translate,
+            shear=self.shear,
         )
 
     def get_eval_dataset(self, **kwargs):

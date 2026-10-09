@@ -4,7 +4,7 @@
 # Model settings (one of n, s, m, l, x — see Performance table in README)
 task: 'detect'           # detect | segment | classify | pose | obb
 model_version: 's'
-num_classes: 80      # COCO=80; set to len(names) for custom data
+num_classes: 3      # COCO=80; set to len(names) for custom data (=3 here)
 nkpt: 17             # pose keypoints (pose task)
 nm: 32               # seg mask coefficients (segment task)
 reg_max: 16          # YOLOv8 DFL bins (do not change)

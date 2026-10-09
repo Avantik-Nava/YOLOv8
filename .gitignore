@@ -15,6 +15,9 @@ YOLOv8_outputs/
 
 # Data (keep yamls, ignore datasets)
 /datasets/
+/dataset/
+runs/
+vis/
 *.jpg
 *.png
 *.mp4

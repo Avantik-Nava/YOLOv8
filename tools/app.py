@@ -273,7 +273,11 @@ def main():
                     password=ssh_pass or None,
                     key_bytes=ssh_key.getvalue() if ssh_key else None, port=int(ssh_port))
                 st.session_state.ssh = client
-                st.session_state.ssh_cred = {"host": ssh_host, "user": ssh_user, "port": int(ssh_port)}
+                # creds kept in memory only (for silent auto-reconnect); never written to disk
+                st.session_state.ssh_cred = {"host": ssh_host, "user": ssh_user,
+                                             "port": int(ssh_port),
+                                             "password": ssh_pass or None,
+                                             "key": ssh_key.getvalue() if ssh_key else None}
                 st.session_state.ssh_info = f"{ver} · {gpu_info(client)}"
                 env_log = ensure_env(client)
                 st.session_state.remote_log = "\n".join(env_log)
@@ -613,6 +617,26 @@ def _ssh_alive():
     try:
         c = st.session_state.get("ssh")
         return c is not None and c.get_transport() is not None and c.get_transport().is_active()
+    except Exception:
+        return False
+
+
+def _ensure_ssh():
+    """True if connected; else silently reconnect with stored creds (memory only)."""
+    if _ssh_alive():
+        return True
+    cred = st.session_state.get("ssh_cred") or {}
+    if not cred.get("host") or not cred.get("user"):
+        return False
+    try:
+        from tools.remote_gpu import connect, gpu_info
+        client, ver = connect(
+            cred["host"], cred["user"],
+            password=cred.get("password"), key_bytes=cred.get("key"),
+            port=int(cred.get("port", 22)))
+        st.session_state.ssh = client
+        st.session_state.ssh_info = f"{ver} · {gpu_info(client)}"
+        return True
     except Exception:
         return False
 

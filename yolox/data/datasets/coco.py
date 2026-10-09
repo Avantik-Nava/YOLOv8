@@ -19,7 +19,17 @@ from ..dataset import letterbox
 class COCODataset(Dataset):
     def __init__(self, data_dir, json_file, img_size=640, augment=False,
                  name="train2017", mosaic_prob=0.0, flip_prob=0.5,
-                 hsv_h=0.015, hsv_s=0.7, hsv_v=0.4):
+                 hsv_h=0.015, hsv_s=0.7, hsv_v=0.4,
+                 degrees=0.0, translate=0.1, shear=0.0):
+        self.data_dir = Path(data_dir)
+        self.img_size = img_size
+        self.augment = augment
+        self.mosaic_prob = mosaic_prob
+        self.flip_prob = flip_prob
+        self.hsv = (hsv_h, hsv_s, hsv_v)
+        self.degrees = degrees
+        self.translate = translate
+        self.shear = shear
         self.data_dir = Path(data_dir)
         self.img_size = img_size
         self.augment = augment
@@ -47,9 +57,14 @@ class COCODataset(Dataset):
     def _load_raw(self, idx):
         img_id = self.ids[idx % len(self.ids)]
         info = self.imgs[img_id]
-        img = cv2.imread(str(self.data_dir / info["file_name"]), cv2.IMREAD_COLOR)
-        if img is None:  # try images/ subfolder layout
-            img = cv2.imread(str(self.data_dir / "images" / info["file_name"]), cv2.IMREAD_COLOR)
+        img = None
+        for cand in [self.data_dir / info["file_name"],
+                     self.data_dir / "images" / info["file_name"],
+                     self.data_dir / "train2017" / Path(info["file_name"]).name,
+                     self.data_dir / "val2017" / Path(info["file_name"]).name]:
+            img = cv2.imread(str(cand), cv2.IMREAD_COLOR)
+            if img is not None:
+                break
         assert img is not None, f"missing {info['file_name']}"
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         h, w = img.shape[:2]
@@ -64,7 +79,7 @@ class COCODataset(Dataset):
         return img, labels
 
     def __getitem__(self, idx):
-        from ..augment import augment_hsv, mosaic4
+        from ..augment import augment_hsv, mosaic4, random_affine
         if self.augment and len(self.ids) >= 4 and np.random.rand() < self.mosaic_prob:
             samples = [self._load_raw(idx)] + \
                       [self._load_raw(np.random.randint(0, len(self.ids))) for _ in range(3)]
@@ -73,6 +88,8 @@ class COCODataset(Dataset):
             img, labels = self._load_raw(idx)
             img, _, _ = letterbox(img, self.img_size)
         if self.augment:
+            img, labels = random_affine(img, labels, degrees=self.degrees,
+                                        translate=self.translate, shear=self.shear)
             if np.random.rand() < self.flip_prob:
                 img = np.fliplr(img).copy()
                 if len(labels):

@@ -19,6 +19,7 @@ class Exp(BaseExp):
         super().__init__()
 
         # ---------------- model config ---------------- #
+        self.backend = "native"   # native (dependency-free reimpl) | ultra (real ultralytics pkg)
         self.task = "detect"      # detect | segment | classify | pose | obb
         self.num_classes = 80
         # factor of model depth / width (YOLOX-style; replaces version string)
@@ -92,10 +93,13 @@ class Exp(BaseExp):
         self.nmsthre = 0.7
 
     def merge(self, cfg_list):
+        if not cfg_list:
+            return
         super().merge(cfg_list)
-        if "max_epoch" in cfg_list:
+        flat = " ".join(cfg_list) if isinstance(cfg_list, list) else str(cfg_list)
+        if "max_epoch" in flat:
             self.epochs = self.max_epoch
-        if "epochs" in cfg_list:
+        if "epochs" in flat:
             self.max_epoch = self.epochs
 
     # ---------------- model ---------------- #
@@ -133,7 +137,8 @@ class Exp(BaseExp):
                 return COCODataset(
                     data_dir=self.data_dir, json_file=self.train_ann,
                     img_size=self.input_size[0], augment=True,
-                    mosaic_prob=self.mosaic_prob, flip_prob=self.flip_prob)
+                    mosaic_prob=self.mosaic_prob, flip_prob=self.flip_prob,
+                    degrees=self.degrees, translate=self.translate, shear=self.shear)
         from yolox.data import YOLODataset
         root, d = self._yolo_dirs()
         imgsz = self.input_size[0]
@@ -150,7 +155,8 @@ class Exp(BaseExp):
             return ClsDataset(root, imgsz)
         return YOLODataset(
             ti, tl, imgsz, augment=True, flip_prob=self.flip_prob,
-            mosaic_prob=self.mosaic_prob, mixup_prob=self.mixup_prob)
+            mosaic_prob=self.mosaic_prob, mixup_prob=self.mixup_prob,
+            degrees=self.degrees, translate=self.translate, shear=self.shear)
 
     def get_data_loader(self, batch_size, is_distributed, no_aug=False, cache_img=None):
         from yolox.data import yolo_collate

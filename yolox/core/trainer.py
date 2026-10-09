@@ -46,10 +46,7 @@ class Trainer:
         scaler = torch.amp.GradScaler("cuda", enabled=self.fp16)
 
         if getattr(args, "ckpt", None):
-            from yolox.utils import load_checkpoint
-            ckpt = load_checkpoint(args.ckpt, map_location=self.device)
-            model.load_state_dict(ckpt.get("model_state_dict", ckpt), strict=False)
-            print(f"resumed {args.ckpt}")
+            self._load_initial_weights(model, optimizer)
 
         best_map, bad, num_iter = 0.0, 0, 0
         no_aug_closed = False
@@ -105,6 +102,58 @@ class Trainer:
                         print(f"early stop @ep{epoch+1} best_mAP={best_map:.4f}")
                         break
         print(f"done {self.save_dir} best_mAP50-95={best_map:.4f}")
+
+    def _load_initial_weights(self, model, optimizer):
+        """Initial-stage pretrained weights (-c/--ckpt).
+
+        Fine-tune mode (default): loads backbone/neck + matching head layers,
+        skips mismatched cls-head layers (different nc). Starts epoch 0.
+        Resume mode (--resume): also restores optimizer + start_epoch.
+        Supports our YOLOX_outputs/*.pth and Ultralytics yolov8*.pt.
+        """
+        from yolox.utils import load_checkpoint
+        path = getattr(self.args, "ckpt", None)
+        ckpt = load_checkpoint(path, map_location=self.device)
+        raw = ckpt.get("model_state_dict", ckpt)
+        if "model" in ckpt and isinstance(ckpt["model"], dict):
+            raw = ckpt["model"]  # ultralytics .pt layout
+        if "state_dict" in ckpt and isinstance(ckpt["state_dict"], dict):
+            raw = ckpt["state_dict"]
+        # strip common prefixes (module./model.)
+        clean = {}
+        for k, v in raw.items():
+            nk = k
+            if nk.startswith("module."):
+                nk = nk[len("module."):]
+            if nk.startswith("model."):
+                nk = nk[len("model."):]
+            clean[nk] = v
+        own = model.state_dict()
+        matched, skipped = {}, []
+        for k, v in clean.items():
+            if k in own and own[k].shape == v.shape:
+                matched[k] = v
+            else:
+                skipped.append(k)
+        missing = [k for k in own if k not in matched]
+        model.load_state_dict(matched, strict=False)
+        print(f"pretrained {path}: loaded {len(matched)}/{len(own)} layers, "
+              f"skipped {len(skipped)} (shape/name mismatch, e.g. cls-head nc)")
+        if len(matched) == 0:
+            print("WARNING: 0 layers matched — arch differs (e.g. official "
+                  "ultralytics .pt). Training continues from random init; "
+                  "use our YOLOX_outputs/*.pth or converted weights for transfer.")
+        if getattr(self.args, "resume", False):
+            if "optimizer" in ckpt:
+                try:
+                    optimizer.load_state_dict(ckpt["optimizer"])
+                    print("resumed optimizer")
+                except Exception as e:
+                    print(f"optimizer restore skipped: {e}")
+            if "epoch" in ckpt and getattr(self.args, "start_epoch", None) is None:
+                self.start_epoch = int(ckpt["epoch"]) + 1
+                print(f"resumed from epoch {self.start_epoch}")
+        return matched, missing
 
     def _save(self, model, optimizer, epoch, name, ema=None):
         sd = ema.ema.state_dict() if ema is not None else model.state_dict()
